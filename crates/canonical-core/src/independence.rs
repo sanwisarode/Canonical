@@ -27,7 +27,7 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 }
 
 /// Partition the unassigned metavariables under `root` into independent components.
-pub fn split(unassigned: Vec<W<Meta>>) -> Vec<Vec<W<Meta>>> {
+pub fn split(unassigned: Vec<W<Meta>>) -> Vec<(Vec<W<Meta>>, f64)> {
     let mut indices = HashMap::new();
     for (i, x) in unassigned.iter().enumerate() {
         indices.insert(x.clone(), i);
@@ -64,5 +64,10 @@ pub fn split(unassigned: Vec<W<Meta>>) -> Vec<Vec<W<Meta>>> {
         let r = uf.find(i);
         buckets.entry(r).or_default().push(mvar.clone());
     }
-    buckets.into_values().collect()
+    // buckets.into_values().collect()
+    // pair each component with its entropy
+    buckets.into_values().map(|component| {
+        let entropy = Meta::next_new(&component).entropy;
+        (component, entropy)
+    }).collect()
 }

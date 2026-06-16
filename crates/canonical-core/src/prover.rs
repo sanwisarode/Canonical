@@ -135,6 +135,9 @@ impl Prover {
             let unassigned = [beginning, &args, &end[1..]].concat();
             let mut components = split(unassigned);
 
+            // Total entropy across all components
+            let total_component_entropy: f64 = components.iter().map(|(_, e)| e).sum();
+
 
             // if components.len() == 0 {
             //     return (DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 1, attempts: 0, branching: 0 }, true);
@@ -143,14 +146,23 @@ impl Prover {
             // Start assignment statistics.
             let mut result = DFSResult { unknown_count: 0, steps: 0, entropy: next_result.entropy, solution_count: 0, branching, attempts };
             let mut success = true;
-            for (idx, component) in components.iter().enumerate() {
-                let (component_result, component_success) = self.dfs(component, entropy * info.weight() / total_weight , max_size - 1);
+            for (idx, (component, component_entropy)) in components.iter().enumerate() {
+                let others_entropy = total_component_entropy - component_entropy;
+                let (component_result, component_success) = self.dfs(component, entropy * info.weight() / total_weight - others_entropy , max_size - 1);
                 result.add(component_result);
                 if !component_success {
                     success = false;
                     break;
                 }
             }
+            // for (idx, component) in components.iter().enumerate() {
+            //     let (component_result, component_success) = self.dfs(component, entropy * info.weight() / total_weight , max_size - 1);
+            //     result.add(component_result);
+            //     if !component_success {
+            //         success = false;
+            //         break;
+            //     }
+            // }
             total.add(result.clone());
 
             
@@ -158,7 +170,7 @@ impl Prover {
                 return (total, true) // not accumulating other DFSResults
             } else {
                 // unassign failures
-                for component in components.iter_mut() {
+                for (component, _) in components.iter_mut() {
                     for mvar in component.iter_mut() {
                         mvar.borrow_mut().pop_recursive();
                     }
