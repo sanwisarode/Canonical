@@ -14,6 +14,7 @@ pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
+    branching: usize,
     component: Component
 }
 
@@ -21,7 +22,6 @@ struct Component {
     beginning: Vec<W<Meta>>,
     next: W<Meta>,
     end: Vec<W<Meta>>,
-    next_index: usize,
     entropy: f64,
     parent: Option<usize>
 }
@@ -42,6 +42,22 @@ impl Meta {
             }
         }
         return options;
+    }
+}
+
+impl Frame {
+    fn new(component: Component) -> Self {
+        let domain = Meta::domain(component.next.clone());
+        Frame { component, branching: domain.len(), domain }
+    }
+}
+
+impl Component {
+    fn new() -> Self {
+        // TODO compute next, entropy, etc.
+        Component {
+            
+        }
     }
 }
 
@@ -70,10 +86,17 @@ impl Prover {
     fn dfs(&mut self) -> bool {
         while RUN.load(Ordering::Relaxed) {
             let Some(component) = self.components.pop() else { return true };
-            self.frames.push(Frame { domain: Meta::domain(component.next.clone()), component });
+            self.frames.push(Frame::new(component));
             if !self.increment(Some(self.frames.len())) { return false; }
 
             // register the new components.
+            let frame = self.frames.last().unwrap();
+            let args: Vec<W<Meta>> = frame.component.next.borrow().assignment.as_ref().unwrap().args.iter().map(|x| x.downgrade()).collect();
+            let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
+            let components = split(unassigned);
+            for component in components {
+                self.components.push(Component::new());
+            }
         }
         return false;
     }
