@@ -14,7 +14,7 @@ pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
-    branching: usize,
+    tree_entropy: f64,
     component: Component
 }
 
@@ -22,8 +22,10 @@ struct Component {
     beginning: Vec<W<Meta>>,
     next: W<Meta>,
     end: Vec<W<Meta>>,
-    entropy: f64,
-    parent: Option<usize>
+    tree_entropy: f64,
+    meta_entropy: f64,
+    extra_entropy: f64,
+    parent: usize
 }
 
 pub struct Prover {
@@ -48,16 +50,23 @@ impl Meta {
 impl Frame {
     fn new(component: Component) -> Self {
         let domain = Meta::domain(component.next.clone());
-        Frame { component, branching: domain.len(), domain }
+        Frame { tree_entropy: component.tree_entropy * domain.len() as f64, component, domain }
     }
 }
 
 impl Component {
-    fn new() -> Self {
-        // TODO compute next, entropy, etc.
+    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, length: usize) -> Self {
+        let next = Meta::next_new(&component.0);
+        let (beginning, end) = component.0.split_at(next.index);
         Component {
-            
-        }
+            tree_entropy: frame.tree_entropy,
+            meta_entropy: component.1,
+            extra_entropy: frame.component.extra_entropy + sum - component.1,
+            next: next.next.meta,
+            beginning: beginning.to_vec(),
+            end: end[1..].to_vec(),
+            parent: length
+        }   
     }
 }
 
@@ -65,37 +74,36 @@ impl Component {
 impl Prover {
     fn backtrack(&mut self, index: usize) {
         while self.frames.len() > index {
-            let mut frame = self.frames.pop().unwrap();
-            frame.component.next.borrow_mut().unassign();
+            self.frames.pop().unwrap().component.next.borrow_mut().unassign();
         }
     }
 
-    fn increment(&mut self, mut parent: Option<usize>) -> bool {
-        while let Some(index) = parent {
+    fn increment(&mut self, mut index: usize) -> bool {
+        loop {
             self.backtrack(index);
-            let frame = &mut self.frames[index];
+            if index == 0 { return false; }
+            let frame = &mut self.frames[index-1];
             if let Some((assn, constraints, _)) = frame.domain.pop() {
                 frame.component.next.borrow_mut().assign(assn, constraints);
                 return true;
             }
-            parent = frame.component.parent;
+            index = frame.component.parent;
         }
-        return false;
     }
 
     fn dfs(&mut self) -> bool {
         while RUN.load(Ordering::Relaxed) {
             let Some(component) = self.components.pop() else { return true };
             self.frames.push(Frame::new(component));
-            if !self.increment(Some(self.frames.len())) { return false; }
+            if !self.increment(self.frames.len()) { return false; }
 
-            // register the new components.
             let frame = self.frames.last().unwrap();
             let args: Vec<W<Meta>> = frame.component.next.borrow().assignment.as_ref().unwrap().args.iter().map(|x| x.downgrade()).collect();
             let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
             let components = split(unassigned);
+            let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
             for component in components {
-                self.components.push(Component::new());
+                self.components.push(Component::new(frame, component, sum, self.frames.len()));
             }
         }
         return false;
