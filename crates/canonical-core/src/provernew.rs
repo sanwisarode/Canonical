@@ -81,10 +81,9 @@ impl Prover {
     fn step(&mut self, mut index: usize) -> bool {
         loop {
             self.backtrack(index);
-            if index == 0 { return false; }
-            let frame = &mut self.frames[index-1];
+            let Some(frame) = &mut self.frames.get_mut(index - 1) else { return false; };
             if let Some((assn, constraints, _)) = frame.domain.pop() {
-                let args: Vec<W<Meta>> = frame.component.next.borrow().assignment.as_ref().unwrap().args.iter().map(|x| x.downgrade()).collect();
+                let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
                 let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
                 let components = split(unassigned);
                 let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
