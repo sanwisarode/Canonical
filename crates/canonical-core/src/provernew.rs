@@ -14,7 +14,7 @@ pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
-    tree_entropy: f64,
+    total_weight: f64,
     component: Component
 }
 
@@ -34,32 +34,28 @@ pub struct Prover {
     components: Vec<Component>
 }
 
-impl Meta {
-    fn domain(next: W<Meta>) -> Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)> {
-        let mut options = Vec::new();
-        for (db, linked) in next.borrow().gamma.iter_unify(next.borrow().typ.as_ref().unwrap().0.clone()) {
-            let attempt = test(db, linked, next.clone());
-            if let Some(Some(result)) = attempt {
-                options.push(result);
-            }
-        }
-        return options;
-    }
-}
-
 impl Frame {
     fn new(component: Component) -> Self {
-        let domain = Meta::domain(component.next.clone());
-        Frame { tree_entropy: component.tree_entropy * domain.len() as f64, component, domain }
+        let mut domain = Vec::new();
+        let mut total_weight = 0.0;
+        for (db, linked) in component.next.borrow().gamma.iter_unify(
+            component.next.borrow().typ.as_ref().unwrap().0.clone()) {
+            let attempt = test(db, linked, component.next.clone());
+            if let Some(Some(result)) = attempt {
+                total_weight += result.2.weight();
+                domain.push(result);
+            }
+        }
+        Frame { total_weight, component, domain }
     }
 }
 
 impl Component {
-    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, parent: usize) -> Self {
+    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, parent: usize, weight: f64) -> Self {
         let next = Meta::next_new(&component.0);
         let (beginning, end) = component.0.split_at(next.index);
         Component {
-            tree_entropy: frame.tree_entropy,
+            tree_entropy: frame.component.tree_entropy * (weight / frame.total_weight) ,
             meta_entropy: component.1,
             extra_entropy: frame.component.extra_entropy + sum - component.1,
             next: next.next.meta,
@@ -82,14 +78,14 @@ impl Prover {
         loop {
             self.backtrack(index);
             let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
-            if let Some((assn, constraints, _)) = frame.domain.pop() {
+            if let Some((assn, constraints, info)) = frame.domain.pop() {
                 let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
                 let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
                 let components = split(unassigned);
                 let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
                 frame.component.next.borrow_mut().assign(assn, constraints);
                 for component in components {
-                    self.components.push(Component::new(frame, component, sum, index));
+                    self.components.push(Component::new(frame, component, sum, index, info.weight()));
                 }
                 return true;
             }
