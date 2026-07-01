@@ -55,7 +55,7 @@ impl Frame {
 }
 
 impl Component {
-    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, length: usize) -> Self {
+    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, parent: usize) -> Self {
         let next = Meta::next_new(&component.0);
         let (beginning, end) = component.0.split_at(next.index);
         Component {
@@ -65,7 +65,7 @@ impl Component {
             next: next.next.meta,
             beginning: beginning.to_vec(),
             end: end[1..].to_vec(),
-            parent: length
+            parent
         }   
     }
 }
@@ -78,13 +78,20 @@ impl Prover {
         }
     }
 
-    fn increment(&mut self, mut index: usize) -> bool {
+    fn step(&mut self, mut index: usize) -> bool {
         loop {
             self.backtrack(index);
             if index == 0 { return false; }
             let frame = &mut self.frames[index-1];
             if let Some((assn, constraints, _)) = frame.domain.pop() {
+                let args: Vec<W<Meta>> = frame.component.next.borrow().assignment.as_ref().unwrap().args.iter().map(|x| x.downgrade()).collect();
+                let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
+                let components = split(unassigned);
+                let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
                 frame.component.next.borrow_mut().assign(assn, constraints);
+                for component in components {
+                    self.components.push(Component::new(frame, component, sum, index));
+                }
                 return true;
             }
             index = frame.component.parent;
@@ -95,16 +102,7 @@ impl Prover {
         while RUN.load(Ordering::Relaxed) {
             let Some(component) = self.components.pop() else { return true };
             self.frames.push(Frame::new(component));
-            if !self.increment(self.frames.len()) { return false; }
-
-            let frame = self.frames.last().unwrap();
-            let args: Vec<W<Meta>> = frame.component.next.borrow().assignment.as_ref().unwrap().args.iter().map(|x| x.downgrade()).collect();
-            let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
-            let components = split(unassigned);
-            let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
-            for component in components {
-                self.components.push(Component::new(frame, component, sum, self.frames.len()));
-            }
+            if !self.step(self.frames.len()) { return false; }
         }
         return false;
     }
