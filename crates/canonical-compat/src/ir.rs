@@ -261,7 +261,7 @@ impl IRSpine {
             bindings: bindings.downgrade(),
             from_original_problem: true,
             _owned_bindings: Some(bindings),
-            stats: SearchInfo::new(),
+            stats: SearchInfo::new_branch(),
             had_rigid_equation: false,
             branching: 1.0,
             parent: None,

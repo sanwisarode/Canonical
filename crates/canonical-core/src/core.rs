@@ -101,7 +101,7 @@ impl Meta {
             bindings: typ.0.borrow().codomain.borrow().bindings.clone(),
             from_original_problem: false,
             _owned_bindings: None,
-            stats: SearchInfo::new(),
+            stats: SearchInfo::new_branch(),
             had_rigid_equation: false,
             branching: 1.0,
             parent: None,
@@ -147,14 +147,16 @@ impl Meta {
     }
 
     /// Unassign the metavariable, returning constraints to their pre-assignment state.
-    pub fn unassign(&mut self) -> f64 {
+    pub fn unassign(&mut self) -> SearchInfo {
         let assn = self.assignment.as_mut().unwrap();
         for meta in assn.changes.iter_mut() {
             meta.borrow_mut().constraints.pop();
         }
-        self.assignment.take().unwrap().args.iter().map(
-            |arg| arg.borrow().stats.lifetime_steps
-        ).sum()
+        let mut result = SearchInfo::new_arg();
+        for arg in self.assignment.take().unwrap().args {
+            result.add_arg(&arg.borrow().stats);
+        }
+        result
     }
 
     pub fn pop_recursive(&mut self) {
@@ -697,7 +699,7 @@ impl TypeBase {
                 bindings: self.types.borrow()[Index::Param(i)].as_ref().unwrap().borrow().codomain.borrow().bindings.clone(),
                 from_original_problem: false,
                 _owned_bindings: None,
-                stats: SearchInfo::new(),
+                stats: SearchInfo::new_branch(),
                 had_rigid_equation: false,
                 branching: 1.0,
                 parent: parent.clone()

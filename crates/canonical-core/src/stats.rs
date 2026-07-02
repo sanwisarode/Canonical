@@ -85,38 +85,29 @@ impl MetaInfo {
 /// `assignment` values accumulate over the DFS subtree after the metavariable is given an assignment.
 #[derive(Clone)]
 pub struct SearchInfo {
-    pub dfs_steps: f64,
-    pub lifetime_steps: f64,
-    // pub lifetime_attempts: u32,
-    pub dfs_completed: bool,
-    pub assignment_completed: bool
+    pub steps: f64,
+    pub completed: bool
 }
 
 impl SearchInfo {
     /// The `SearchInfo` of a new metavariable.
-    pub fn new() -> Self {
-        SearchInfo { dfs_steps: 0.0, lifetime_steps: 0.0, /* lifetime_attempts: 0,*/ dfs_completed: false, assignment_completed: false }
+    pub fn new_branch() -> Self {
+        SearchInfo { steps: 0.0, completed: false }
+    }
+
+    pub fn new_arg() -> Self {
+        SearchInfo { steps: 1.0, completed: true }
     }
     
     /// Add `info` into `self`.
-    pub(crate) fn add(&mut self, info: &SearchInfo) {
-        self.lifetime_steps += info.lifetime_steps;
-        // self.lifetime_attempts += info.lifetime_attempts;
-        self.dfs_steps += info.dfs_steps;
-        self.dfs_completed = self.dfs_completed || info.dfs_completed;
-        self.assignment_completed = self.assignment_completed || info.assignment_completed;
+    pub(crate) fn add_branch(&mut self, info: &SearchInfo) {
+        self.steps += info.steps;
+        self.completed = self.completed || info.completed;
     }
 
-    /// Reset statistics related to being the next metavariable.
-    pub(crate) fn dfs_fence(&mut self) {
-        self.dfs_steps = 0.0;
-        self.dfs_completed = false;
-        self.assignment_completed = false;
-    }
-
-    /// Reset statistics related to an assignment.
-    pub(crate) fn assignment_fence(&mut self) {
-        self.assignment_completed = false;
+    pub fn add_arg(&mut self, info: &SearchInfo) {
+        self.steps += info.steps;
+        self.completed = self.completed && info.completed
     }
 }
 
@@ -140,8 +131,8 @@ impl MetaStats {
     /// Add the `result` from the DFS subtree and the metavariable lifetime `info` to the statistics.
     fn accumulate(&mut self, result: &DFSResult, entropy_gain: f64, info: &SearchInfo) {
         self.attempts += 1;
-        self.steps += info.dfs_steps;
-        if info.dfs_completed {
+        self.steps += info.steps;
+        if info.completed {
             self.completed_count += 1;
         }
         self.log_entropy_gain += entropy_gain.ln_1p();
@@ -184,9 +175,9 @@ impl AssignmentInfo {
     }
 
     /// Adds new statistics information to the original `bin` of this assignment.
-    pub fn log(&self, result: &DFSResult, completion_share: bool, ever_completed: bool) {
+    pub fn log(&self, completion_share: bool, ever_completed: bool) {
         ASSIGNMENT_CONTROL.with_data_mut(|map| 
-            map.entry(self.bin).or_insert_with(AssignmentStats::new).accumulate(result, completion_share, ever_completed));
+            map.entry(self.bin).or_insert_with(AssignmentStats::new).accumulate(completion_share, ever_completed));
     }
 }
 
@@ -206,9 +197,9 @@ impl AssignmentStats {
     }
 
     /// Add the `result` from the DFS subtree to the statistics.
-    fn accumulate(&mut self, result: &DFSResult, completion_share: bool, ever_completed: bool) {
+    fn accumulate(&mut self, completion_share: bool, ever_completed: bool) {
         self.count += 1;
-        self.bushiness += result.unknown_count as f64 / (result.steps + result.unknown_count) as f64;
+        // self.bushiness += result.unknown_count as f64 / (result.steps + result.unknown_count) as f64;
         if ever_completed {
             self.completion_count += 1;
             if completion_share {
