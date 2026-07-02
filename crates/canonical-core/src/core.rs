@@ -83,11 +83,9 @@ pub struct Meta {
 
     pub _owned_bindings: Option<S<Indexed<S<Bind>>>>, // exclusively for ownership purposes.
 
-    /// Statistics and heuristics information.
-    /// Statistics are generally accumulated in `stats_buffer`, but this must be reset during parallel processing,
-    /// such that we can accumulate the updates from each thread. So, we transfer `stats_buffer` to `stats`.
+    /// Statistics and heuristics information. A cloned metavariable starts with fresh (zero) `stats`,
+    /// so each parallel thread accumulates its own delta, and threads are merged by simple addition on join.
     pub stats: SearchInfo,
-    pub stats_buffer: SearchInfo,
     pub has_rigid_equation: bool,
     pub branching: f64,
     pub parent: Option<W<Meta>>
@@ -104,7 +102,6 @@ impl Meta {
             from_original_problem: false,
             _owned_bindings: None,
             stats: SearchInfo::new(),
-            stats_buffer: SearchInfo::new(),
             has_rigid_equation: false,
             branching: 1.0,
             parent: None,
@@ -699,7 +696,6 @@ impl TypeBase {
                 from_original_problem: false,
                 _owned_bindings: None,
                 stats: SearchInfo::new(),
-                stats_buffer: SearchInfo::new(),
                 has_rigid_equation: false,
                 branching: 1.0,
                 parent: parent.clone()

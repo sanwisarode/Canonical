@@ -129,7 +129,7 @@ impl Meta {
                 let acc = args.iter().fold(Next { next: None, meta_entropy: 1.0, size: 1, tree_entropy: 1.0 }, 
                     |acc, meta| acc.accumulate(Meta::next(meta.downgrade())));
                 if acc.next.is_none() {
-                    meta.borrow_mut().stats_buffer.dfs_completed = true;
+                    meta.borrow_mut().stats.dfs_completed = true;
                 }
                 // We performed the recursive calls first so that `acc` contains complete subtree information. 
                 let tax = AssignmentInfo::new(meta.clone()).tax(&acc);
@@ -144,7 +144,7 @@ impl Meta {
             Some(Assignment { args, .. }) => {
                 // The entropy of an assignment is the branching factor, with added tax.
                 let acc = args.iter().all(|meta| Meta::mark_completed(meta.downgrade()));
-                meta.borrow_mut().stats_buffer.dfs_completed = acc;
+                meta.borrow_mut().stats.dfs_completed = acc;
                 acc
             }
         }

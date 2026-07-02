@@ -95,8 +95,7 @@ impl Prover {
         // Start an attempt for next.
         next.meta.borrow_mut().has_rigid_equation = next.has_rigid_equation;
         next.meta.borrow_mut().stats.dfs_fence();
-        next.meta.borrow_mut().stats_buffer.dfs_fence();
-        next.meta.borrow_mut().stats_buffer.lifetime_attempts += 1;
+        next.meta.borrow_mut().stats.lifetime_attempts += 1;
 
         STEP_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -114,7 +113,7 @@ impl Prover {
             }
         }
         let branching = options.len();
-        next.meta.borrow_mut().stats_buffer.dfs_steps = options.len() as f64;
+        next.meta.borrow_mut().stats.dfs_steps = options.len() as f64;
 
         let mut total = DFSResult { unknown_count: 0, steps: 1, entropy: next_result.entropy, solution_count: 0, branching, attempts };
         
@@ -129,7 +128,6 @@ impl Prover {
 
             meta.assign(assignment, constraints);
             meta.stats.assignment_fence();
-            meta.stats_buffer.assignment_fence();
             meta.branching = total_weight / info.weight();
 
             let unassigned = [beginning, &args, &end[1..]].concat();
@@ -182,35 +180,30 @@ impl Prover {
             
             // The steps spent on this metavariable 
             for child in meta.assignment.as_ref().unwrap().args.iter() {
-                meta.stats_buffer.dfs_steps += child.borrow().stats.lifetime_steps + child.borrow().stats_buffer.lifetime_steps;
+                meta.stats.dfs_steps += child.borrow().stats.lifetime_steps;
             }
 
             // End assignment statistics.
             meta.stats.assignment_fence();
-            meta.stats_buffer.assignment_fence();
-            
+
             meta.unassign();
-            results.push((result, info, next.meta.borrow().stats.assignment_completed 
-                                        || next.meta.borrow().stats_buffer.assignment_completed));
+            results.push((result, info, next.meta.borrow().stats.assignment_completed));
         }
 
         let mut weighted_entropy_gain = 0.0;
         let mut max_steps = 0;
         for (result, info, assignment_completed) in results {
-            info.log(&result, assignment_completed, next.meta.borrow().stats.dfs_completed 
-                                                                                  || next.meta.borrow().stats_buffer.dfs_completed);
+            info.log(&result, assignment_completed, next.meta.borrow().stats.dfs_completed);
             weighted_entropy_gain += (result.entropy / next_result.entropy) * (result.steps as f64);
             if result.steps > max_steps { max_steps = result.steps }
         }
         let effective_branching_factor = if max_steps == 0 { 1.0 } else { total.steps as f64 / max_steps as f64 };
 
-        next.meta.borrow_mut().stats_buffer.lifetime_steps += next.meta.borrow().stats_buffer.dfs_steps + next.meta.borrow().stats.dfs_steps;
-        let mut stats = next.meta.borrow().stats.clone();
-        stats.add(&next.meta.borrow().stats_buffer);
+        next.meta.borrow_mut().stats.lifetime_steps += next.meta.borrow().stats.dfs_steps;
+        let stats = next.meta.borrow().stats.clone();
 
-        // End the attempt for next. 
+        // End the attempt for next.
         next.meta.borrow_mut().stats.dfs_fence();
-        next.meta.borrow_mut().stats_buffer.dfs_fence();
 
         next.log(&total, weighted_entropy_gain / (total.steps as f64 * effective_branching_factor), &stats);
         (total, false)
@@ -240,8 +233,7 @@ impl Prover {
         // Start an attempt for next.
         next.meta.borrow_mut().has_rigid_equation = next.has_rigid_equation;
         next.meta.borrow_mut().stats.dfs_fence();
-        next.meta.borrow_mut().stats_buffer.dfs_fence();
-        next.meta.borrow_mut().stats_buffer.lifetime_attempts += 1;
+        next.meta.borrow_mut().stats.lifetime_attempts += 1;
 
         // STEP_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -259,7 +251,7 @@ impl Prover {
             }
         }
         let branching = options.len();
-        next.meta.borrow_mut().stats_buffer.dfs_steps = options.len() as f64;
+        next.meta.borrow_mut().stats.dfs_steps = options.len() as f64;
 
         let mut results = Vec::new();
         let mut iter = options.into_iter();
@@ -273,26 +265,23 @@ impl Prover {
 
                 // Start assignment statistics.
                 meta.stats.assignment_fence();
-                meta.stats_buffer.assignment_fence();
 
                 meta.branching = total_weight / info.weight();
                 let result = self.parallel_dfs(max_entropy, max_size, callback);
                 
                 // The steps spent on this metavariable 
                 for child in meta.assignment.as_ref().unwrap().args.iter() {
-                    meta.stats_buffer.dfs_steps += child.borrow().stats.lifetime_steps + child.borrow().stats_buffer.lifetime_steps;
+                    meta.stats.dfs_steps += child.borrow().stats.lifetime_steps;
                 }
 
                 // End assignment statistics.
                 meta.stats.assignment_fence();
-                meta.stats_buffer.assignment_fence();
                 
                 meta.unassign();
                 // If there are more than two remaining options, this option took many steps, 
                 // and there are less than 100 jobs, execute the remaining options in parallel.
                 let parallel = iter.len() > 2 && result.steps > (num_jobs*100) as u32 && num_jobs < 100;
-                results.push((result, info, next.meta.borrow().stats.assignment_completed 
-                                         || next.meta.borrow().stats_buffer.assignment_completed));
+                results.push((result, info, next.meta.borrow().stats.assignment_completed));
                 if parallel { break }
             }
         }
@@ -317,10 +306,9 @@ impl Prover {
             NUM_JOBS.fetch_sub(1, Ordering::Relaxed);
             let mut steps = 0.0;
             for child in translated_meta.borrow().assignment.as_ref().unwrap().args.iter() {
-                steps += child.borrow().stats.lifetime_steps + child.borrow().stats_buffer.lifetime_steps;
+                steps += child.borrow().stats.lifetime_steps;
             }
-            let assignment_completed = translated_meta.borrow().stats.assignment_completed 
-                                          || translated_meta.borrow().stats_buffer.assignment_completed;
+            let assignment_completed = translated_meta.borrow().stats.assignment_completed;
             (result, prover, steps, info, assignment_completed)
         }).collect();
 
@@ -328,7 +316,7 @@ impl Prover {
         for (result, prover, steps, info, assignment_completed) in more_results {
             self.accumulate(prover);
             results.push((result, info, assignment_completed));
-            next.meta.borrow_mut().stats_buffer.dfs_steps += steps;
+            next.meta.borrow_mut().stats.dfs_steps += steps;
         }
         
         // Accumulate statistics over sequential and parallel branches.
@@ -336,27 +324,24 @@ impl Prover {
         let mut weighted_entropy_gain = 0.0;
         let mut max_steps = 0;
         for (result, info, assignment_completed) in results {
-            info.log(&result, assignment_completed, next.meta.borrow().stats.dfs_completed 
-                                                                                  || next.meta.borrow().stats_buffer.dfs_completed);
+            info.log(&result, assignment_completed, next.meta.borrow().stats.dfs_completed);
             weighted_entropy_gain += (result.entropy / next_result.meta_entropy) * (result.steps as f64);
             if result.steps > max_steps { max_steps = result.steps }
             acc.add(result);
         }
         let effective_branching_factor = if max_steps == 0 { 1.0 } else { acc.steps as f64 / max_steps as f64 };
 
-        next.meta.borrow_mut().stats_buffer.lifetime_steps += next.meta.borrow().stats_buffer.dfs_steps + next.meta.borrow().stats.dfs_steps;
-        let mut stats = next.meta.borrow().stats.clone();
-        stats.add(&next.meta.borrow().stats_buffer);
+        next.meta.borrow_mut().stats.lifetime_steps += next.meta.borrow().stats.dfs_steps;
+        let stats = next.meta.borrow().stats.clone();
 
-        // End the attempt for next. 
+        // End the attempt for next.
         next.meta.borrow_mut().stats.dfs_fence();
-        next.meta.borrow_mut().stats_buffer.dfs_fence();
 
         next.log(&acc, weighted_entropy_gain / (acc.steps as f64 * effective_branching_factor), &stats);
         acc
     }
 
-    /// Return a clone of this prover and a map of metavariables between this and the new clone, with `stats_buffer` moved into `stats`.
+    /// Return a clone of this prover and a map of metavariables between this and the new clone, with fresh (zero) statistics.
     pub fn try_clone(&self) -> Option<(Self, HashMap<W<Meta>, W<Meta>>)> {
         Meta::try_clone(self.meta.downgrade()).map(|(meta, map)| {
             (Prover { meta, next_root: map.get(&self.next_root).unwrap().clone() }, map)
@@ -370,10 +355,10 @@ impl Prover {
 }
 
 
-/// Transfer the assignment and stats from `from` to `to`. Returns the translation of `meta`, if present. 
+/// Transfer the assignment from `from` to `to`. Returns the translation of `meta`, if present.
+/// Statistics are not copied: the clone starts with fresh `stats` so each thread accumulates its
+/// own delta, and threads are merged by simple addition on join (see `accumulate_stats`).
 pub fn transfer(from: W<Meta>, mut to: W<Meta>, map: &mut HashMap<W<Meta>, W<Meta>>) -> bool {
-    to.borrow_mut().stats.add(&from.borrow().stats);
-    to.borrow_mut().stats.add(&from.borrow().stats_buffer);
     to.borrow_mut().has_rigid_equation = from.borrow().has_rigid_equation;
     to.borrow_mut().branching = from.borrow().branching;
     map.insert(from.clone(), to.clone());
@@ -396,7 +381,7 @@ pub fn transfer(from: W<Meta>, mut to: W<Meta>, map: &mut HashMap<W<Meta>, W<Met
 
 /// Accumulate the statistics of `from` into `to`.
 fn accumulate_stats(mut to: W<Meta>, from: W<Meta>) {
-    to.borrow_mut().stats_buffer.add(&from.borrow().stats_buffer);
+    to.borrow_mut().stats.add(&from.borrow().stats);
     if to.borrow().assignment.is_none() { return; }
 
     let zipped_args = to.borrow().assignment.as_ref().unwrap().args.iter()
@@ -407,7 +392,7 @@ fn accumulate_stats(mut to: W<Meta>, from: W<Meta>) {
 }
 
 impl Meta {
-    /// Return a clone of this metvariable and a map of metavariables between this and the new clone, with `stats_buffer` moved into `stats`.
+    /// Return a clone of this metvariable and a map of metavariables between this and the new clone, with fresh (zero) statistics.
     pub fn try_clone(meta: W<Meta>) -> Option<(S<Meta>, HashMap<W<Meta>, W<Meta>>)> {
         let new = S::new(Meta::new(meta.borrow().typ.as_ref().unwrap().clone()));
         let mut map = HashMap::default();
