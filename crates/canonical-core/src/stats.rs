@@ -87,7 +87,7 @@ impl MetaInfo {
 pub struct SearchInfo {
     pub dfs_steps: f64,
     pub lifetime_steps: f64,
-    pub lifetime_attempts: u32,
+    // pub lifetime_attempts: u32,
     pub dfs_completed: bool,
     pub assignment_completed: bool
 }
@@ -95,13 +95,13 @@ pub struct SearchInfo {
 impl SearchInfo {
     /// The `SearchInfo` of a new metavariable.
     pub fn new() -> Self {
-        SearchInfo { dfs_steps: 0.0, lifetime_steps: 0.0, lifetime_attempts: 0, dfs_completed: false, assignment_completed: false }
+        SearchInfo { dfs_steps: 0.0, lifetime_steps: 0.0, /* lifetime_attempts: 0,*/ dfs_completed: false, assignment_completed: false }
     }
     
     /// Add `info` into `self`.
     pub(crate) fn add(&mut self, info: &SearchInfo) {
         self.lifetime_steps += info.lifetime_steps;
-        self.lifetime_attempts += info.lifetime_attempts;
+        // self.lifetime_attempts += info.lifetime_attempts;
         self.dfs_steps += info.dfs_steps;
         self.dfs_completed = self.dfs_completed || info.dfs_completed;
         self.assignment_completed = self.assignment_completed || info.assignment_completed;
@@ -174,7 +174,7 @@ impl AssignmentInfo {
     /// Collect the information of an assignment. 
     pub fn new(meta: W<Meta>) -> Self {
         let constraints_generated = meta.borrow().assignment.as_ref().unwrap().changes.len();
-        let had_rigid_equation = meta.borrow().has_rigid_equation;
+        let had_rigid_equation = meta.borrow().had_rigid_equation;
         let has_rigid_type = meta.borrow().assignment.as_ref().unwrap().has_rigid_type;
         let bin = meta.borrow().typ.as_ref().unwrap().0.usize() // + had_rigid_equation as usize
                        + meta.borrow().assignment.as_ref().unwrap().bind.usize() + (has_rigid_type as usize) << 1;

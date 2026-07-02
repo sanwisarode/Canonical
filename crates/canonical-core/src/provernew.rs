@@ -15,6 +15,7 @@ pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
     total_weight: f64,
+    dfs_steps: f64,
     component: Component
 }
 
@@ -46,7 +47,7 @@ impl Frame {
                 domain.push(result);
             }
         }
-        Frame { total_weight, component, domain }
+        Frame { total_weight, component, domain, dfs_steps: 0.0 }
     }
 }
 
@@ -70,7 +71,9 @@ impl Component {
 impl Prover {
     fn backtrack(&mut self, index: usize) {
         while self.frames.len() > index {
-            self.frames.pop().unwrap().component.next.borrow_mut().unassign();
+            let mut frame = self.frames.pop().unwrap();
+            frame.component.next.borrow_mut().unassign();
+            frame.component.next.borrow_mut().stats.lifetime_steps += frame.dfs_steps;
         }
     }
 
@@ -79,6 +82,8 @@ impl Prover {
             self.backtrack(index);
             let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
             if let Some((assn, constraints, info)) = frame.domain.pop() {
+                frame.dfs_steps += frame.component.next.borrow_mut().unassign(); // TODO two unassignment points, bad. 
+
                 let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
                 let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
                 let components = split(unassigned);

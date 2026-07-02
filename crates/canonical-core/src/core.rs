@@ -86,7 +86,7 @@ pub struct Meta {
     /// Statistics and heuristics information. A cloned metavariable starts with fresh (zero) `stats`,
     /// so each parallel thread accumulates its own delta, and threads are merged by simple addition on join.
     pub stats: SearchInfo,
-    pub has_rigid_equation: bool,
+    pub had_rigid_equation: bool,
     pub branching: f64,
     pub parent: Option<W<Meta>>
 }
@@ -102,7 +102,7 @@ impl Meta {
             from_original_problem: false,
             _owned_bindings: None,
             stats: SearchInfo::new(),
-            has_rigid_equation: false,
+            had_rigid_equation: false,
             branching: 1.0,
             parent: None,
             typ: Some(typ)
@@ -147,12 +147,14 @@ impl Meta {
     }
 
     /// Unassign the metavariable, returning constraints to their pre-assignment state.
-    pub fn unassign(&mut self) {
+    pub fn unassign(&mut self) -> f64 {
         let assn = self.assignment.as_mut().unwrap();
         for meta in assn.changes.iter_mut() {
             meta.borrow_mut().constraints.pop();
         }
-        self.assignment = None;
+        self.assignment.take().unwrap().args.iter().map(
+            |arg| arg.borrow().stats.lifetime_steps
+        ).sum()
     }
 
     pub fn pop_recursive(&mut self) {
@@ -696,7 +698,7 @@ impl TypeBase {
                 from_original_problem: false,
                 _owned_bindings: None,
                 stats: SearchInfo::new(),
-                has_rigid_equation: false,
+                had_rigid_equation: false,
                 branching: 1.0,
                 parent: parent.clone()
             }))

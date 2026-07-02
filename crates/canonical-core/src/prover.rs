@@ -93,9 +93,9 @@ impl Prover {
         }
 
         // Start an attempt for next.
-        next.meta.borrow_mut().has_rigid_equation = next.has_rigid_equation;
+        next.meta.borrow_mut().had_rigid_equation = next.has_rigid_equation;
         next.meta.borrow_mut().stats.dfs_fence();
-        next.meta.borrow_mut().stats.lifetime_attempts += 1;
+        // next.meta.borrow_mut().stats.lifetime_attempts += 1;
 
         STEP_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -231,9 +231,9 @@ impl Prover {
         }
 
         // Start an attempt for next.
-        next.meta.borrow_mut().has_rigid_equation = next.has_rigid_equation;
+        next.meta.borrow_mut().had_rigid_equation = next.has_rigid_equation;
         next.meta.borrow_mut().stats.dfs_fence();
-        next.meta.borrow_mut().stats.lifetime_attempts += 1;
+        // next.meta.borrow_mut().stats.lifetime_attempts += 1;
 
         // STEP_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -359,7 +359,7 @@ impl Prover {
 /// Statistics are not copied: the clone starts with fresh `stats` so each thread accumulates its
 /// own delta, and threads are merged by simple addition on join (see `accumulate_stats`).
 pub fn transfer(from: W<Meta>, mut to: W<Meta>, map: &mut HashMap<W<Meta>, W<Meta>>) -> bool {
-    to.borrow_mut().has_rigid_equation = from.borrow().has_rigid_equation;
+    to.borrow_mut().had_rigid_equation = from.borrow().had_rigid_equation;
     to.borrow_mut().branching = from.borrow().branching;
     map.insert(from.clone(), to.clone());
 

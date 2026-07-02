@@ -262,7 +262,7 @@ impl IRSpine {
             from_original_problem: true,
             _owned_bindings: Some(bindings),
             stats: SearchInfo::new(),
-            has_rigid_equation: false,
+            had_rigid_equation: false,
             branching: 1.0,
             parent: None,
         }, used)
