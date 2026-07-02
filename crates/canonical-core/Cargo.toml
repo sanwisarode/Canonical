@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 string-interner = "0.19.0"
 rayon = "1.10.0"
-mimalloc = "0.1.43"
+mimalloc = "=0.1.46"
 arc-swap = "1.7.1"
 once_cell = "1.20.3"
 thread_local_collect = "1.0.1"
