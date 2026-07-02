@@ -21,9 +21,9 @@ struct Frame {
 
 struct Component {
     beginning: Vec<W<Meta>>,
-    next: W<Meta>,
+    next: MetaInfo,
     end: Vec<W<Meta>>,
-    tree_entropy: f64,
+    fuel: f64,
     meta_entropy: f64,
     extra_entropy: f64,
     parent: usize
@@ -39,9 +39,9 @@ impl Frame {
     fn new(component: Component) -> Self {
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
-        for (db, linked) in component.next.borrow().gamma.iter_unify(
-            component.next.borrow().typ.as_ref().unwrap().0.clone()) {
-            let attempt = test(db, linked, component.next.clone());
+        for (db, linked) in component.next.meta.borrow().gamma.iter_unify(
+            component.next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
+            let attempt = test(db, linked, component.next.meta.clone());
             if let Some(Some(result)) = attempt {
                 total_weight += result.2.weight();
                 domain.push(result);
@@ -53,13 +53,14 @@ impl Frame {
 
 impl Component {
     fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, parent: usize, weight: f64) -> Self {
-        let next = Meta::next_new(&component.0);
+        let mut next = Meta::next_new(&component.0);
+        next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
         let (beginning, end) = component.0.split_at(next.index);
         Component {
-            tree_entropy: frame.component.tree_entropy * (weight / frame.total_weight) ,
+            fuel: frame.component.fuel * (weight / frame.total_weight) ,
             meta_entropy: component.1,
             extra_entropy: frame.component.extra_entropy + sum - component.1,
-            next: next.next.meta,
+            next: next.next,
             beginning: beginning.to_vec(),
             end: end[1..].to_vec(),
             parent
@@ -72,8 +73,10 @@ impl Prover {
     fn backtrack(&mut self, index: usize) {
         while self.frames.len() > index {
             let mut frame = self.frames.pop().unwrap();
-            frame.component.next.borrow_mut().unassign();
-            frame.component.next.borrow_mut().stats.add_branch(&frame.stats);
+            frame.stats.add_branch(&frame.component.next.meta.borrow_mut().unassign());
+            frame.component.next.meta.borrow_mut().stats.add_branch(&frame.stats);
+            frame.component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
+            // TODO add its component back to the stack?
         }
     }
 
@@ -82,16 +85,18 @@ impl Prover {
             self.backtrack(index);
             let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
             if let Some((assn, constraints, info)) = frame.domain.pop() {
-                frame.stats.add_branch(&frame.component.next.borrow_mut().unassign()); // TODO two unassignment points, bad. 
+                let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad.
+                frame.stats.add_branch(&assn_stats); 
 
                 let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
                 let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
                 let components = split(unassigned);
                 let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
-                frame.component.next.borrow_mut().assign(assn, constraints);
+                frame.component.next.meta.borrow_mut().assign(assn, constraints);
                 for component in components {
                     self.components.push(Component::new(frame, component, sum, index, info.weight()));
                 }
+                // TODO don't we need to save the indices of these components for removal when unassigned? 
                 return true;
             }
             index = frame.component.parent;
