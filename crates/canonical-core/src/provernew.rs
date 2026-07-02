@@ -16,7 +16,8 @@ struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
     total_weight: f64,
     stats: SearchInfo,
-    component: Component
+    truncate: usize,
+    component: Component,
 }
 
 struct Component {
@@ -36,7 +37,7 @@ pub struct Prover {
 }
 
 impl Frame {
-    fn new(component: Component) -> Self {
+    fn new(component: Component, truncate: usize) -> Self {
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
         for (db, linked) in component.next.meta.borrow().gamma.iter_unify(
@@ -47,7 +48,7 @@ impl Frame {
                 domain.push(result);
             }
         }
-        Frame { total_weight, component, domain, stats: SearchInfo::new_branch() }
+        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), truncate }
     }
 }
 
@@ -76,7 +77,9 @@ impl Prover {
             frame.stats.add_branch(&frame.component.next.meta.borrow_mut().unassign());
             frame.component.next.meta.borrow_mut().stats.add_branch(&frame.stats);
             frame.component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
-            // TODO add its component back to the stack?
+
+            self.components.truncate(frame.truncate);
+            self.components.push(frame.component);
         }
     }
 
@@ -87,6 +90,7 @@ impl Prover {
             if let Some((assn, constraints, info)) = frame.domain.pop() {
                 let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad.
                 frame.stats.add_branch(&assn_stats); 
+                self.components.truncate(frame.truncate);
 
                 let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
                 let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
@@ -96,7 +100,6 @@ impl Prover {
                 for component in components {
                     self.components.push(Component::new(frame, component, sum, index, info.weight()));
                 }
-                // TODO don't we need to save the indices of these components for removal when unassigned? 
                 return true;
             }
             index = frame.component.parent;
@@ -106,7 +109,7 @@ impl Prover {
     fn dfs(&mut self) -> bool {
         while RUN.load(Ordering::Relaxed) {
             let Some(component) = self.components.pop() else { return true };
-            self.frames.push(Frame::new(component));
+            self.frames.push(Frame::new(component, self.components.len()));
             if !self.step(self.frames.len()) { return false; }
         }
         return false;
