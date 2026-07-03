@@ -36,7 +36,7 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
             let mut owned_linked = Vec::new();
             [false, true].map(|enabled| {
                 configure(enabled);
-                let prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
+                let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
                 prover.prove(&|_| RUN.store(false, Ordering::Relaxed), false).0
             })
         }));

@@ -147,7 +147,7 @@ pub async fn main() {
     let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));
     let mut owned_linked = Vec::new();
     
-    let prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
+    let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
     // let state = AppState {
     //     current: prover.meta,
     //     undo: Vec::new(),

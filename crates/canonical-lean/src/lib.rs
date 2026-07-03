@@ -443,7 +443,7 @@ pub extern "C" fn rule_to_string(rule: *const LeanRule) -> *const LeanStringObje
 }
 
 /// Starts `prover`, appending solutions to `terms` and sending on `sender` once complete.
-fn main(prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<Vec<IRTerm>>>) -> (DFSResult, u32) {
+fn main(mut prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<Vec<IRTerm>>>) -> (DFSResult, u32) {
     prover.prove(&|term: Term| {
         let mut v = terms.lock().unwrap();
         let bindings = term.base.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone();
@@ -524,9 +524,9 @@ pub unsafe extern "C" fn canonical(typ: *const LeanType, name: *const LeanString
         let tb = S::new(ir_type.to_type(&ES::new(), Polarity::Goal).0);
         let problem_bind = S::new(Bind::new(to_string(name), Polarity::Goal));
         let mut owned_linked = Vec::new();
-        let prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
-
+        
         let worker = thread::spawn(move || {
+            let prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
             main(prover, tx, count, arc_clone)
         });
 

@@ -12,15 +12,67 @@ use crate::independence::split;
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 
-/// A `Prover` has a metavariable for the main goal, and a flag for `program_synthesis` mode.
-pub struct Prover {
-    pub meta: S<Meta>,
-    /// In case we only want to solve a subtree of `meta`, this defines the root for `next`.
-    pub next_root: W<Meta>
+struct Frame {
+    domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
+    total_weight: f64,
+    stats: SearchInfo,
+    truncate: usize,
+    component: Component,
 }
 
-unsafe impl Send for Prover {}
-unsafe impl Send for W<Meta> {}
+struct Component {
+    beginning: Vec<W<Meta>>,
+    next: MetaInfo,
+    end: Vec<W<Meta>>,
+    fuel: f64,
+    meta_entropy: f64,
+    extra_entropy: f64,
+    parent: usize
+}
+
+pub struct Prover {
+    pub meta: S<Meta>,
+    frames: Vec<Frame>,
+    components: Vec<Component>
+}
+
+impl Frame {
+    fn new(component: Component, truncate: usize) -> Self {
+        let mut domain = Vec::new();
+        let mut total_weight = 0.0;
+        for (db, linked) in component.next.meta.borrow().gamma.iter_unify(
+            component.next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
+            let attempt = test(db, linked, component.next.meta.clone());
+            if let Some(Some(result)) = attempt {
+                total_weight += result.2.weight();
+                domain.push(result);
+            }
+        }
+        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), truncate }
+    }
+}
+
+impl Component {
+    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, parent: usize, weight: f64) -> Self {
+        let mut next = Meta::next_new(&component.0);
+        next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
+        let (beginning, end) = component.0.split_at(next.index);
+        Component {
+            fuel: frame.component.fuel * (weight / frame.total_weight),
+            meta_entropy: component.1,
+            extra_entropy: frame.component.extra_entropy + sum - component.1,
+            next: next.next,
+            beginning: beginning.to_vec(),
+            end: end[1..].to_vec(),
+            parent
+        }   
+    }
+
+    fn prune(&self) -> bool {
+        return self.fuel < self.meta_entropy + self.extra_entropy;
+    }
+}
+
 
 impl Prover {
     /// Creates a new Prover for the specified `Type`. 
@@ -35,7 +87,7 @@ impl Prover {
         compile(Type(tb_ref.clone(), ES::new(), problem_bind.clone()));
         let ty = Type(tb_ref.clone(), es, problem_bind.clone());
         let meta = S::new(Meta::new(ty));
-        Prover { next_root: meta.downgrade(), meta }
+        Prover { frames: Vec::new(), components: vec![Component { beginning: Vec::new(), next: MetaInfo::new(meta.downgrade()), end: Vec::new(), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }], meta }
     }
 
     /// Gets the current (partial) term of the prover. 
@@ -44,23 +96,23 @@ impl Prover {
     }
 
     /// Start proof search, with a callback for solutions.
-    pub fn prove<F>(&self, callback: &F, verbose: bool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
+    pub fn prove<F>(&mut self, callback: &F, verbose: bool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
         reset();
         let mut depth = 1e4;
         let mut previous_steps = 0;
         let mut acc = DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 };
-        let unassigned = vec![self.meta.downgrade()];
         // Iterative deepening. 
         while RUN.load(Ordering::Relaxed) {
-            let max_size = ((depth as f32).ln_1p()*4.0) as u32;
+            let max_size = ((depth as f32).ln_1p()*4.0) as usize;
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
-            let (result, success) = self.dfs(&unassigned, depth, max_size);
+            self.components[0].fuel = depth;
+            let success = self.dfs(max_size);
             if success {
                 callback(self.get_term());
             }
-            if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
+            // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
             
-            previous_steps = result.steps;
+            // previous_steps = result.steps;
             depth *= 3.0;
 
             // Update the global statistics maps.
@@ -68,339 +120,64 @@ impl Prover {
             ASSIGNMENT_MAP.store(Arc::new(ASSIGNMENT_CONTROL.probe_tls()));
             
             // If all branches were fully explored, we can terminate.
-            let fail = result.unknown_count == 0;
-            acc.add(result);
-            if fail { 
-                RUN.store(false, Ordering::Relaxed);
-                return (acc, previous_steps)
-            }
+            // let fail = result.unknown_count == 0;
+            // acc.add(result);
+            // if fail { 
+            //     RUN.store(false, Ordering::Relaxed);
+            //     return (acc, previous_steps)
+            // }
         }
+        acc.steps = STEP_COUNT.load(Ordering::Relaxed);
         (acc, previous_steps)
     }
 
-    pub fn dfs(&self, unassigned: &Vec<W<Meta>>, entropy: f64, max_size: u32) -> (DFSResult, bool) {
-        guard_overflow();
-        if !RUN.load(Ordering::Relaxed) {
-            // The task has been cancelled. 
-            return (DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 }, false);
+    fn backtrack(&mut self, index: usize) {
+        while self.frames.len() > index {
+            let mut frame = self.frames.pop().unwrap();
+            frame.stats.add_branch(&frame.component.next.meta.borrow_mut().unassign());
+            frame.component.next.meta.borrow_mut().stats.add_branch(&frame.stats);
+            frame.component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
+
+            self.components.truncate(frame.truncate);
+            self.components.push(frame.component);
         }
+    }
 
-        // Meta::mark_completed(self.next_root.clone());
-        let next_result = Meta::next_new(unassigned);
-        let mut next = next_result.next;
-        if next_result.entropy > entropy || max_size == 0 {
-            return (DFSResult { unknown_count: 1, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 }, false);
-        }
+    fn step(&mut self, mut index: usize) -> bool {
+        'outer: loop {
+            self.backtrack(index);
+            let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
+            if let Some((assn, constraints, info)) = frame.domain.pop() {
+                let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
+                frame.stats.add_branch(&assn_stats); 
+                self.components.truncate(frame.truncate);
 
-        // Start an attempt for next.
-        next.meta.borrow_mut().had_rigid_equation = next.has_rigid_equation;
-        // next.meta.borrow_mut().stats.dfs_fence();
-        // next.meta.borrow_mut().stats.lifetime_attempts += 1;
-
-        STEP_COUNT.fetch_add(1, Ordering::Relaxed);
-
-        let mut options = Vec::new();
-        let mut total_weight = 0.0;
-        let mut attempts = 0;
-        for (db, linked) in next.meta.borrow().gamma.iter_unify(next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
-            let attempt = test(db, linked, next.meta.clone());
-            if attempt.is_some() {
-                attempts += 1;
-            }
-            if let Some(Some(result)) = attempt {
-                total_weight += result.2.weight();
-                options.push(result);
-            }
-        }
-        let branching = options.len();
-        // next.meta.borrow_mut().stats.dfs_steps = options.len() as f64;
-
-        let mut total = DFSResult { unknown_count: 0, steps: 1, entropy: next_result.entropy, solution_count: 0, branching, attempts };
-        
-        let mut results = Vec::new();
-        let mut iter = options.into_iter();
-
-        'outer: while let Some((assignment, constraints, info)) = iter.next() {
-            let meta = next.meta.borrow_mut();
-
-            let (beginning, end) = unassigned.split_at(next_result.index);
-            let args: Vec<W<Meta>> = assignment.args.iter().map(|x| x.downgrade()).collect();
-
-            meta.assign(assignment, constraints);
-            // meta.stats.assignment_fence();
-            meta.branching = total_weight / info.weight();
-
-            let unassigned = [beginning, &args, &end[1..]].concat();
-            let mut components = split(unassigned);
-
-            // Total entropy across all components
-            let total_component_entropy: f64 = components.iter().map(|(_, e)| e).sum();
-
-
-            // if components.len() == 0 {
-            //     return (DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 1, attempts: 0, branching: 0 }, true);
-            // }
-
-            // Start assignment statistics.
-            let mut result = DFSResult { unknown_count: 0, steps: 0, entropy: next_result.entropy, solution_count: 0, branching, attempts };
-            let mut success = true;
-            for (idx, (component, component_entropy)) in components.iter().enumerate() {
-                let others_entropy = total_component_entropy - component_entropy;
-                let (component_result, component_success) = self.dfs(component, entropy * info.weight() / total_weight - others_entropy , max_size - 1);
-                result.add(component_result);
-                if !component_success {
-                    success = false;
-                    break;
-                }
-            }
-            // for (idx, component) in components.iter().enumerate() {
-            //     let (component_result, component_success) = self.dfs(component, entropy * info.weight() / total_weight , max_size - 1);
-            //     result.add(component_result);
-            //     if !component_success {
-            //         success = false;
-            //         break;
-            //     }
-            // }
-            total.add(result.clone());
-
-            
-            if success {
-                return (total, true) // not accumulating other DFSResults
-            } else {
-                // unassign failures
-                for (component, _) in components.iter_mut() {
-                    for mvar in component.iter_mut() {
-                        mvar.borrow_mut().pop_recursive();
+                let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
+                let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
+                let components = split(unassigned);
+                let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
+                frame.component.next.meta.borrow_mut().assign(assn, constraints);
+                for component in components {
+                    let component = Component::new(frame, component, sum, index, info.weight());
+                    if component.prune() {
+                        index = frame.component.parent;
+                        continue 'outer;
                     }
-                    for mvar in component.iter_mut() {
-                        mvar.borrow_mut().unassign_recursive();
-                    }
+                    self.components.push(component);
                 }
+                return true;
             }
-            
-            // The steps spent on this metavariable 
-            // for child in meta.assignment.as_ref().unwrap().args.iter() {
-            //     meta.stats.dfs_steps += child.borrow().stats.lifetime_steps;
-            // }
-
-            // End assignment statistics.
-            // meta.stats.assignment_fence();
-
-            let search_info = meta.unassign();
-            results.push((result, info, search_info));
+            index = frame.component.parent;
         }
-
-        let mut weighted_entropy_gain = 0.0;
-        let mut max_steps = 0;
-        let mut dfs_steps = SearchInfo::new_branch();
-        for (result, info, assignment_completed) in results {
-            info.log(assignment_completed.completed, dfs_steps.completed);
-            dfs_steps.add_branch(&assignment_completed);
-            weighted_entropy_gain += (result.entropy / next_result.entropy) * (result.steps as f64);
-            if result.steps > max_steps { max_steps = result.steps }
-        }
-        let effective_branching_factor = if max_steps == 0 { 1.0 } else { total.steps as f64 / max_steps as f64 };
-
-        next.meta.borrow_mut().stats.add_branch(&dfs_steps);
-        // let stats = next.meta.borrow().stats.clone();
-
-        // End the attempt for next.
-        // next.meta.borrow_mut().stats.dfs_fence();
-
-        next.log(&total, weighted_entropy_gain / (total.steps as f64 * effective_branching_factor), &dfs_steps);
-        (total, false)
     }
 
-    /// Parallelized DFS, up to an entropy of `max_entropy` and term size of `max_size`. Solutions are passed to the `callback`.
-    pub fn parallel_dfs<F>(&self, max_entropy: f64, max_size: u32, callback: &F) -> DFSResult where F: Fn(Term) + Send + Sync {
-        guard_overflow();
-        if !RUN.load(Ordering::Relaxed) {
-            // The task has been cancelled. 
-            return DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 };
+    fn dfs(&mut self, max_size: usize) -> bool {
+        while RUN.load(Ordering::Relaxed) {
+            STEP_COUNT.fetch_add(1, Ordering::Relaxed);
+            let Some(component) = self.components.pop() else { return true };
+            if self.frames.len() < max_size { self.frames.push(Frame::new(component, self.components.len())); }
+            if !self.step(self.frames.len()) { return false; }
         }
-        
-        let mut next_result = Meta::next(self.next_root.clone());
-        let exceeds = next_result.exceeds(max_entropy, max_size);
-        let Some(next) = next_result.next.as_mut() else {
-            // No metavariables left, send the solution to the callback.
-            callback(self.get_term());
-            return DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 1, attempts: 0, branching: 0 };
-        };
-
-        if exceeds { 
-            // Partial terms exceeds the depth threshold, consider the branch result unknown. 
-            return DFSResult { unknown_count: 1, steps: 0, entropy: next_result.meta_entropy, solution_count: 0, attempts: 0, branching: 0 };
-        }
-
-        // Start an attempt for next.
-        next.meta.borrow_mut().had_rigid_equation = next.has_rigid_equation;
-        // next.meta.borrow_mut().stats.dfs_fence();
-        // next.meta.borrow_mut().stats.lifetime_attempts += 1;
-
-        // STEP_COUNT.fetch_add(1, Ordering::Relaxed);
-
-        let mut options = Vec::new();
-        let mut total_weight = 0.0;
-        let mut attempts = 0;
-        for (db, linked) in next.meta.borrow().gamma.iter_unify(next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
-            let attempt = test(db, linked, next.meta.clone());
-            if attempt.is_some() {
-                attempts += 1;
-            }
-            if let Some(Some(result)) = attempt {
-                total_weight += result.2.weight();
-                options.push(result);
-            }
-        }
-        let branching = options.len();
-        // next.meta.borrow_mut().stats.dfs_steps = options.len() as f64;
-
-        let mut results = Vec::new();
-        let mut iter = options.into_iter();
-        let num_jobs = NUM_JOBS.load(Ordering::Relaxed);
-
-        if branching < 2 || next_result.tree_entropy > 1000.0 || num_jobs > 100 {
-            while let Some((assignment, constraints, info)) = iter.next() {
-                let meta = next.meta.borrow_mut();
-
-                meta.assign(assignment, constraints);
-
-                // Start assignment statistics.
-                // meta.stats.assignment_fence();
-
-                meta.branching = total_weight / info.weight();
-                let result = self.parallel_dfs(max_entropy, max_size, callback);
-                
-                // The steps spent on this metavariable 
-                // for child in meta.assignment.as_ref().unwrap().args.iter() {
-                //     meta.stats.dfs_steps += child.borrow().stats.lifetime_steps;
-                // }
-
-                // End assignment statistics.
-                // meta.stats.assignment_fence();
-                
-                let dfs_info = meta.unassign();
-                // If there are more than two remaining options, this option took many steps, 
-                // and there are less than 100 jobs, execute the remaining options in parallel.
-                let parallel = iter.len() > 2 && result.steps > (num_jobs*100) as u32 && num_jobs < 100;
-                results.push((result, info, dfs_info));
-                if parallel { break }
-            }
-        }
-
-        // Create cloned provers for each remaining option. 
-        let provers: Vec<(Prover, W<Meta>, AssignmentInfo)> = iter.filter_map(
-            |(assignment, constraints, info)| {
-            next.meta.borrow_mut().assign(assignment, constraints);
-
-            next.meta.borrow_mut().branching = total_weight / info.weight();
-            let result = self.try_clone();
-
-            next.meta.borrow_mut().unassign();
-            result.map(|(prover, map)| (prover, map.get(&next.meta).unwrap().clone(), info))
-        }).collect();
-        NUM_JOBS.fetch_add(provers.len(), Ordering::Acquire);
-
-        // Parallel iteration over remaining options. 
-        let more_results: Vec<(DFSResult, Prover, AssignmentInfo, SearchInfo)> = provers.into_par_iter().map(
-            |(prover, translated_meta, info)| {
-            let result = prover.parallel_dfs(max_entropy, max_size, callback);
-            NUM_JOBS.fetch_sub(1, Ordering::Relaxed);
-            // let mut steps = 0.0;
-            // for child in translated_meta.borrow().assignment.as_ref().unwrap().args.iter() {
-            //     steps += child.borrow().stats.lifetime_steps;
-            // }
-            let assignment_completed = translated_meta.borrow().stats.clone();
-            (result, prover, info, assignment_completed)
-        }).collect();
-
-        let mut dfs_steps = SearchInfo::new_branch();
-
-        // Accumulate the parallel results into self.
-        for (result, prover, info, assignment_completed) in more_results {
-            self.accumulate(prover);
-            dfs_steps.add_branch(&assignment_completed);
-            results.push((result, info, assignment_completed));
-        }
-        
-        // Accumulate statistics over sequential and parallel branches.
-        let mut acc = DFSResult { unknown_count: 0, steps: 1, entropy: next_result.meta_entropy, solution_count: 0, branching, attempts };
-        let mut weighted_entropy_gain = 0.0;
-        let mut max_steps = 0;
-        for (result, info, assignment_completed) in results {
-            info.log( assignment_completed.completed, dfs_steps.completed);
-            weighted_entropy_gain += (result.entropy / next_result.meta_entropy) * (result.steps as f64);
-            if result.steps > max_steps { max_steps = result.steps }
-            acc.add(result);
-        }
-        let effective_branching_factor = if max_steps == 0 { 1.0 } else { acc.steps as f64 / max_steps as f64 };
-
-        next.meta.borrow_mut().stats.add_branch(&dfs_steps);
-        // End the attempt for next.
-        // next.meta.borrow_mut().stats.dfs_fence();
-
-        next.log(&acc, weighted_entropy_gain / (acc.steps as f64 * effective_branching_factor), &dfs_steps);
-        acc
-    }
-
-    /// Return a clone of this prover and a map of metavariables between this and the new clone, with fresh (zero) statistics.
-    pub fn try_clone(&self) -> Option<(Self, HashMap<W<Meta>, W<Meta>>)> {
-        Meta::try_clone(self.meta.downgrade()).map(|(meta, map)| {
-            (Prover { meta, next_root: map.get(&self.next_root).unwrap().clone() }, map)
-        })
-    }
-
-    /// Accumulate the statistics of `other` into self. 
-    fn accumulate(&self, other: Prover) {
-        accumulate_stats(self.meta.downgrade(), other.meta.downgrade());
-    }
-}
-
-
-/// Transfer the assignment from `from` to `to`. Returns the translation of `meta`, if present.
-/// Statistics are not copied: the clone starts with fresh `stats` so each thread accumulates its
-/// own delta, and threads are merged by simple addition on join (see `accumulate_stats`).
-pub fn transfer(from: W<Meta>, mut to: W<Meta>, map: &mut HashMap<W<Meta>, W<Meta>>) -> bool {
-    to.borrow_mut().had_rigid_equation = from.borrow().had_rigid_equation;
-    to.borrow_mut().branching = from.borrow().branching;
-    map.insert(from.clone(), to.clone());
-
-    let Some(from_assn) = &from.borrow().assignment else { return true; };
-    
-    let sub_es = to.borrow().gamma.sub_es(from_assn.head.0);
-    let Some(Some((to_assn, constraints, _info))) =
-        test(from_assn.head, sub_es.linked.unwrap(), to.clone()) else {
-            return false;
-        };
-
-    to.borrow_mut().assign(to_assn, constraints);
-
-    from_assn.args.iter().zip(to.borrow().assignment.as_ref().unwrap().args.iter()).all(
-        |(from_child, to_child)|
-        transfer(from_child.downgrade(), to_child.downgrade(), map)
-    )
-}
-
-/// Accumulate the statistics of `from` into `to`.
-fn accumulate_stats(mut to: W<Meta>, from: W<Meta>) {
-    to.borrow_mut().stats.add_branch(&from.borrow().stats);
-    if to.borrow().assignment.is_none() { return; }
-
-    let zipped_args = to.borrow().assignment.as_ref().unwrap().args.iter()
-        .zip(from.borrow().assignment.as_ref().unwrap().args.iter());
-    for (to_child, from_child) in zipped_args {
-        accumulate_stats(to_child.downgrade(), from_child.downgrade());
-    }
-}
-
-impl Meta {
-    /// Return a clone of this metvariable and a map of metavariables between this and the new clone, with fresh (zero) statistics.
-    pub fn try_clone(meta: W<Meta>) -> Option<(S<Meta>, HashMap<W<Meta>, W<Meta>>)> {
-        let new = S::new(Meta::new(meta.borrow().typ.as_ref().unwrap().clone()));
-        let mut map = HashMap::default();
-        if transfer(meta, new.downgrade(), &mut map) {
-            return Some((new, map))
-        }
-        return None
+        return false;
     }
 }

@@ -132,52 +132,52 @@ async fn assign(
     State(state): State<Arc<Mutex<AppState>>>,
     Json(assign): Json<Assign>,
 ) -> Json<serde_json::Value> {
-    let mut state = lock(&state);
+    // let mut state = lock(&state);
 
-    let index = if assign.def {
-        Index::Let(assign.index)
-    } else {
-        Index::Param(assign.index)
-    };
-    let mut db = DeBruijnIndex(DeBruijn(assign.debruijn), index);
+    // let index = if assign.def {
+    //     Index::Let(assign.index)
+    // } else {
+    //     Index::Param(assign.index)
+    // };
+    // let mut db = DeBruijnIndex(DeBruijn(assign.debruijn), index);
 
-    let current = state.current.downgrade();
-    let (new, map) = Meta::try_clone(current.clone()).unwrap();
+    // let current = state.current.downgrade();
+    // let (new, map) = Meta::try_clone(current.clone()).unwrap();
 
-    let mut meta = map.get(&find_with_id(
-        current,
-        assign.meta_id,
-    )
-    .unwrap()).unwrap().clone();
+    // let mut meta = map.get(&find_with_id(
+    //     current,
+    //     assign.meta_id,
+    // )
+    // .unwrap()).unwrap().clone();
 
-    let mut i = 0;
+    // let mut i = 0;
 
-    while i < AUTOFILL_LIMIT {
-        let Some(Some((assn, constraints, _))) = test(
-            db,
-            meta.borrow().gamma.sub_es(db.0).linked.unwrap(),
-            meta.clone()
-        ) else { break; };
+    // while i < AUTOFILL_LIMIT {
+    //     let Some(Some((assn, constraints, _))) = test(
+    //         db,
+    //         meta.borrow().gamma.sub_es(db.0).linked.unwrap(),
+    //         meta.clone()
+    //     ) else { break; };
 
-        meta.borrow_mut().assign(assn, constraints);
+    //     meta.borrow_mut().assign(assn, constraints);
 
-        if !state.autofill {
-            break;
-        }
+    //     if !state.autofill {
+    //         break;
+    //     }
         
-        if let Some((found, found_db)) = find_autofill(new.downgrade()) {
-            meta = found;
-            db = found_db;
-        } else {
-            break;
-        }
+    //     if let Some((found, found_db)) = find_autofill(new.downgrade()) {
+    //         meta = found;
+    //         db = found_db;
+    //     } else {
+    //         break;
+    //     }
 
-        i += 1;
-    }
+    //     i += 1;
+    // }
 
-    let prev = mem::replace(&mut state.current, new);
-    state.redo.clear();
-    state.undo.push(prev);
+    // let prev = mem::replace(&mut state.current, new);
+    // state.redo.clear();
+    // state.undo.push(prev);
 
     Json(json!({}))
 }
@@ -215,50 +215,51 @@ async fn reset(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Va
 
 /// Attempt to complete the proof with Canonical.
 async fn canonical(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Value> {
-    let mut state = lock(&state);
-    let meta = Meta::try_clone(state.current.downgrade()).unwrap().0;
-    let prover = Prover { next_root: meta.downgrade(), meta };
+    // let mut state = lock(&state);
+    // let meta = Meta::try_clone(state.current.downgrade()).unwrap().0;
+    // let prover = Prover { next_root: meta.downgrade(), meta };
 
-    if let Some(term) = canonical_simple(prover) {
-        let prev = mem::replace(&mut state.current, term);
-        state.redo.clear();
-        state.undo.push(prev);
-    }
+    // if let Some(term) = canonical_simple(prover) {
+    //     let prev = mem::replace(&mut state.current, term);
+    //     state.redo.clear();
+    //     state.undo.push(prev);
+    // }
     Json(json!({}))
 }
 
 /// Attempt to complete only the specified subtree with Canonical.
 async fn canonical1(State(state): State<Arc<Mutex<AppState>>>, Json(solve1) : Json<Solve1>) -> Json<serde_json::Value> {
-    let mut state = lock(&state);
-    let current = state.current.downgrade();
-    let (meta, map) = Meta::try_clone(current.clone()).unwrap();
-    let next_root = map.get(&find_with_id(current, solve1.meta_id).unwrap()).unwrap().clone();
+    // let mut state = lock(&state);
+    // let current = state.current.downgrade();
+    // let (meta, map) = Meta::try_clone(current.clone()).unwrap();
+    // let next_root = map.get(&find_with_id(current, solve1.meta_id).unwrap()).unwrap().clone();
 
-    let prover = Prover { next_root, meta };
-    if let Some(term) = canonical_simple(prover) {
-        let prev = mem::replace(&mut state.current, term);
-        state.redo.clear();
-        state.undo.push(prev);
-    }
+    // let prover = Prover { next_root, meta };
+    // if let Some(term) = canonical_simple(prover) {
+    //     let prev = mem::replace(&mut state.current, term);
+    //     state.redo.clear();
+    //     state.undo.push(prev);
+    // }
     Json(json!({}))
 }
 
 /// Run Canonical for 1 second on `prover`, returning the term if one is found.
 fn canonical_simple(prover: Prover) -> Option<S<Meta>> {
-    let (tx, rx) = mpsc::channel();
+    // let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || {
-        prover.prove(&|value| {
-            if let Some(cloned) = Meta::try_clone(value.base) {
-                let _ = tx.send(Some(cloned.0));
-            } 
-        }, false);
-        tx.send(None)
-    });
+    // thread::spawn(move || {
+    //     prover.prove(&|value| {
+    //         if let Some(cloned) = Meta::try_clone(value.base) {
+    //             let _ = tx.send(Some(cloned.0));
+    //         } 
+    //     }, false);
+    //     tx.send(None)
+    // });
 
-    let term = rx.recv_timeout(Duration::from_secs(1));
-    RUN.store(false, Ordering::Relaxed);
-    term.ok().flatten()
+    // let term = rx.recv_timeout(Duration::from_secs(1));
+    // RUN.store(false, Ordering::Relaxed);
+    // term.ok().flatten()
+    None
 }
 
 /// Find a metavariable with the given hashcode in the children of `meta`.

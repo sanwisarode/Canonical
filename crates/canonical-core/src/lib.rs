@@ -7,4 +7,3 @@ pub mod stats;
 pub mod prover;
 pub mod compiler;
 pub mod independence;
-pub mod provernew;
