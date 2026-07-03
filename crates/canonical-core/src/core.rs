@@ -153,8 +153,10 @@ impl Meta {
             meta.borrow_mut().constraints.pop();
         }
         let mut result = SearchInfo::new_arg();
-        for arg in self.assignment.take().unwrap().args {
-            result.add_arg(&arg.borrow().stats);
+        if let Some(assn) = self.assignment.take() {
+            for arg in assn.args {
+                result.add_arg(&arg.borrow().stats);
+            }
         }
         result
     }

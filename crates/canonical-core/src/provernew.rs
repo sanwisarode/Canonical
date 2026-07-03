@@ -58,7 +58,7 @@ impl Component {
         next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
         let (beginning, end) = component.0.split_at(next.index);
         Component {
-            fuel: frame.component.fuel * (weight / frame.total_weight) ,
+            fuel: frame.component.fuel * (weight / frame.total_weight),
             meta_entropy: component.1,
             extra_entropy: frame.component.extra_entropy + sum - component.1,
             next: next.next,
@@ -66,6 +66,10 @@ impl Component {
             end: end[1..].to_vec(),
             parent
         }   
+    }
+
+    fn prune(&self) -> bool {
+        return self.fuel < self.meta_entropy + self.extra_entropy;
     }
 }
 
@@ -84,11 +88,11 @@ impl Prover {
     }
 
     fn step(&mut self, mut index: usize) -> bool {
-        loop {
+        'outer: loop {
             self.backtrack(index);
             let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
             if let Some((assn, constraints, info)) = frame.domain.pop() {
-                let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad.
+                let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
                 frame.stats.add_branch(&assn_stats); 
                 self.components.truncate(frame.truncate);
 
@@ -98,7 +102,12 @@ impl Prover {
                 let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
                 frame.component.next.meta.borrow_mut().assign(assn, constraints);
                 for component in components {
-                    self.components.push(Component::new(frame, component, sum, index, info.weight()));
+                    let component = Component::new(frame, component, sum, index, info.weight());
+                    if component.prune() {
+                        index = frame.component.parent;
+                        continue 'outer;
+                    }
+                    self.components.push(component);
                 }
                 return true;
             }
