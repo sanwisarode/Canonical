@@ -4,7 +4,7 @@ use crate::memory::*;
 use crate::stats::*;
 use crate::compiler::compile;
 use rayon::prelude::*;
-use std::sync::atomic::{Ordering, AtomicUsize};
+use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use rustc_hash::FxHashMap as HashMap;
 use crate::independence::split;
@@ -33,7 +33,11 @@ struct Component {
 pub struct Prover {
     pub meta: S<Meta>,
     frames: Vec<Frame>,
-    components: Vec<Component>
+    components: Vec<Component>,
+
+    tb_ref: W<TypeBase>,
+    problem_bind: W<Bind>,
+    _owned_linked: Vec<S<Linked>>
 }
 
 impl Frame {
@@ -76,18 +80,23 @@ impl Component {
 
 impl Prover {
     /// Creates a new Prover for the specified `Type`. 
-    pub fn new(tb_ref: W<TypeBase>, problem_bind: W<Bind>, owned_linked: &mut Vec<S<Linked>>) -> Self {
+    pub fn new(tb_ref: W<TypeBase>, problem_bind: W<Bind>) -> Self {
         let entry = &tb_ref.borrow().codomain.borrow().gamma.linked.as_ref().unwrap().borrow().node.entry;
         let node = Node { 
             entry: Entry { params_id: entry.params_id, lets_id: entry.lets_id, subst: None, 
                 context: Some(Type(tb_ref.clone(), tb_ref.borrow().codomain.borrow().gamma.clone(), problem_bind.clone()))}, 
             bindings: tb_ref.borrow().codomain.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone() 
         };
-        let es = ES::new().append(node, owned_linked);
+        let mut owned_linked = Vec::new();
+        let es = ES::new().append(node, &mut owned_linked);
         compile(Type(tb_ref.clone(), ES::new(), problem_bind.clone()));
         let ty = Type(tb_ref.clone(), es, problem_bind.clone());
         let meta = S::new(Meta::new(ty));
-        Prover { frames: Vec::new(), components: vec![Component { beginning: Vec::new(), next: MetaInfo::new(meta.downgrade()), end: Vec::new(), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }], meta }
+        Prover { 
+            frames: Vec::new(), 
+            components: vec![Component { beginning: Vec::new(), next: MetaInfo::new(meta.downgrade()), end: Vec::new(), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }], 
+            meta, tb_ref, problem_bind, _owned_linked: owned_linked 
+        }
     }
 
     /// Gets the current (partial) term of the prover. 
@@ -96,17 +105,17 @@ impl Prover {
     }
 
     /// Start proof search, with a callback for solutions.
-    pub fn prove<F>(&mut self, callback: &F, verbose: bool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
+    pub fn prove<F>(&mut self, callback: &F, verbose: bool, run: &AtomicBool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
         reset();
         let mut depth = 1e4;
         let mut previous_steps = 0;
         let mut acc = DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 };
         // Iterative deepening. 
-        while RUN.load(Ordering::Relaxed) {
+        while run.load(Ordering::Relaxed) {
             let max_size = ((depth as f32).ln_1p()*4.0) as usize;
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             self.components[0].fuel = depth;
-            let success = self.dfs(max_size);
+            let success = self.dfs(max_size, run);
             if success {
                 callback(self.get_term());
             }
@@ -171,13 +180,51 @@ impl Prover {
         }
     }
 
-    fn dfs(&mut self, max_size: usize) -> bool {
-        while RUN.load(Ordering::Relaxed) {
+    fn dfs(&mut self, max_size: usize, run: &AtomicBool) -> bool {
+        while run.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             let Some(component) = self.components.pop() else { return true };
             if self.frames.len() < max_size { self.frames.push(Frame::new(component, self.components.len())); }
             if !self.step(self.frames.len()) { return false; }
         }
         return false;
+    }
+}
+
+impl Clone for Prover {
+    // The cloned prover will not backtrack into the work of the parent prover.
+    fn clone(&self) -> Self {
+        let mut prover = Prover::new(self.tb_ref.clone(), self.problem_bind.clone());
+        for frame in self.frames.iter() {
+            // we assume that we always work on the last component.
+            let component = prover.components.pop().unwrap();
+            let mvar = frame.component.next.meta.clone();
+            let mut mvar_new = component.next.meta.clone();
+            let new_frame = Frame {
+                domain: Vec::new(),
+                total_weight: frame.total_weight,
+                stats: SearchInfo::new_branch(),
+                truncate: frame.truncate,
+                component
+            };
+            let db = mvar.borrow().assignment.as_ref().unwrap().head.clone();
+            let linked = mvar_new.borrow().gamma.sub_es(db.0).linked.unwrap();
+            let (assn, constraints, info) = test(db, linked, mvar_new.clone()).unwrap().unwrap();
+
+            let index = new_frame.component.parent;
+            let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
+            let unassigned: Vec<W<Meta>> = [new_frame.component.beginning.as_slice(), &args, &new_frame.component.end].concat();
+            let components = split(unassigned); // we assume that split is deterministic.
+            let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
+            mvar_new.borrow_mut().assign(assn, constraints);
+            for component in components {
+                // we assume that next_new is deterministic.
+                let component = Component::new(&new_frame, component, sum, index, info.weight());
+                prover.components.push(component);
+            }
+            
+            prover.frames.push(new_frame);
+        }
+        prover
     }
 }

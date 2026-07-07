@@ -455,7 +455,7 @@ fn main(mut prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<V
             RUN.store(false, Ordering::Relaxed);
             sender.send(()).unwrap();
         }
-    }, false)
+    }, false, &RUN)
 }
 
 pub struct Lock {
@@ -523,10 +523,9 @@ pub unsafe extern "C" fn canonical(typ: *const LeanType, name: *const LeanString
         let arc_clone = arc.clone();
         let tb = S::new(ir_type.to_type(&ES::new(), Polarity::Goal).0);
         let problem_bind = S::new(Bind::new(to_string(name), Polarity::Goal));
-        let mut owned_linked = Vec::new();
         
         let worker = thread::spawn(move || {
-            let prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
+            let prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
             main(prover, tx, count, arc_clone)
         });
 
@@ -568,8 +567,7 @@ pub unsafe extern "C" fn refine(typ: *const LeanType) -> *const LeanResult {
         let ir_type = to_ir_type(typ);
         let tb_ref = S::new(ir_type.to_type(&ES::new(), Polarity::Goal).0);
         let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal)); // must be stored
-        let mut owned_linked = Vec::new();
-        let prover = Prover::new(tb_ref.downgrade(), problem_bind.downgrade(), &mut owned_linked);
+        let prover = Prover::new(tb_ref.downgrade(), problem_bind.downgrade());
 
         let new_state = AppState {
             current: prover.meta,
@@ -577,7 +575,7 @@ pub unsafe extern "C" fn refine(typ: *const LeanType) -> *const LeanResult {
             redo: Vec::new(),
             autofill: true,
             constraints: false,
-            _owned_linked: owned_linked,
+            _owned_linked: Vec::new(),
             _owned_tb: tb_ref,
             _owned_bind: problem_bind
         };

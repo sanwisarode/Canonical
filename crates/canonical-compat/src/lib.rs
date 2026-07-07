@@ -11,6 +11,7 @@ use ir::*;
 use std::time::SystemTime;
 use canonical_core::stats::STEP_COUNT;
 use canonical_core::prover::Prover;
+use canonical_core::search::RUN;
 
 /// Manually construct a IRTerm body.
 #[allow(unused_macros)]
@@ -145,9 +146,7 @@ pub async fn main() {
     let irt = IRType::load("lean/debug.json".to_string());
     let tb = S::new(irt.to_type(&ES::new(), Polarity::Goal).0);
     let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));
-    let mut owned_linked = Vec::new();
-    
-    let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
+    let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
     // let state = AppState {
     //     current: prover.meta,
     //     undo: Vec::new(),
@@ -179,5 +178,5 @@ pub async fn main() {
         println!("{}", now.elapsed().unwrap().as_secs_f32());
         println!("{}", IRSpine::from_body::<false>(term.whnf::<false, ()>(&mut owned_linked, &mut ()), false));
         std::process::exit(0);
-    }, true);
+    }, true, &RUN);
 }

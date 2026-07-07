@@ -33,11 +33,10 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
             let problem = Example::load(path.to_str().unwrap().to_string()).problem;
             let tb = S::new(problem.to_type(&ES::new(), Polarity::Goal).0);
             let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));
-            let mut owned_linked = Vec::new();
             [false, true].map(|enabled| {
                 configure(enabled);
-                let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade(), &mut owned_linked);
-                prover.prove(&|_| RUN.store(false, Ordering::Relaxed), false).0
+                let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
+                prover.prove(&|_| RUN.store(false, Ordering::Relaxed), false, &RUN).0
             })
         }));
         let Ok([a, b]) = results else {
