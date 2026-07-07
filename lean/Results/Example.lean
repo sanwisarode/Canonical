@@ -14,7 +14,7 @@ theorem false_of_a_eq_not_a {a : Prop} (h : a = Not a) : False :=
   absurd (Eq.mpr h this) this
 
 theorem Cantor (f : X → Set X) : ¬Surjective f :=
-  by canonical [false_of_a_eq_not_a, congrFun]
+  by canonical +debug [false_of_a_eq_not_a, congrFun]
 
 
 inductive Vec (A : Type) : Nat → Type u where

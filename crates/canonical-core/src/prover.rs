@@ -54,6 +54,18 @@ impl Frame {
         }
         Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), truncate }
     }
+
+    fn assign(&mut self, index: usize, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<Component> {
+        let (assn, constraints, info) = element;
+        let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
+        let unassigned = [self.component.beginning.as_slice(), &args, &self.component.end].concat();
+        let components = split(unassigned);
+        let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
+        self.component.next.meta.borrow_mut().assign(assn, constraints);
+        components.into_iter().map(|component|
+            Component::new(self, component, sum, index, info.weight())
+        ).collect()
+    }
 }
 
 impl Component {
@@ -156,51 +168,83 @@ impl Prover {
         'outer: loop {
             self.backtrack(index);
             let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
-            if let Some((assn, constraints, info)) = frame.domain.pop() {
+            if let Some(element) = frame.domain.pop() {
                 let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
                 frame.stats.add_branch(&assn_stats); 
                 self.components.truncate(frame.truncate);
 
-                let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-                let unassigned = [frame.component.beginning.as_slice(), &args, &frame.component.end].concat();
-                let components = split(unassigned);
-                let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
-                frame.component.next.meta.borrow_mut().assign(assn, constraints);
-                for component in components {
-                    let component = Component::new(frame, component, sum, index, info.weight());
-                    if component.prune() {
-                        index = frame.component.parent;
-                        continue 'outer;
-                    }
-                    self.components.push(component);
+                let mut components = frame.assign(index, element);
+
+                if !components.iter().any(Component::prune) {
+                    index = frame.component.parent;
+                    continue 'outer;
                 }
+
+                self.components.append(&mut components);
+
                 return true;
             }
             index = frame.component.parent;
         }
     }
 
+    fn parallelize(&self, frame: &Frame) -> bool {
+        return false;
+    }
+
     fn dfs(&mut self, max_size: usize, run: &AtomicBool) -> bool {
         while run.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             let Some(component) = self.components.pop() else { return true };
-            if self.frames.len() < max_size { self.frames.push(Frame::new(component, self.components.len())); }
+            if self.frames.len() < max_size { 
+                let mut frame = Frame::new(component, self.components.len());
+                if self.parallelize(&frame) {
+                    let mut provers = Vec::new();
+                    let mut domain = Vec::new();
+                    domain.append(&mut frame.domain); // ownership hack
+                    while let Some(element) = domain.pop() {
+                        // no need to add components.
+                        let _components = frame.assign(self.frames.len() + 1, element);
+                        
+                        self.frames.push(frame);
+
+                        provers.push(self.clone());
+                        
+                        // regain ownership
+                        frame = self.frames.pop().unwrap();
+                    }
+
+                    let child_run = AtomicBool::new(true);
+
+                    let result = provers.into_par_iter().any(|mut prover| prover.dfs(max_size, &child_run));
+                    // perform the successful assignment. Why don't we use callbacks, again?
+                    // also, we need to obtain the SearchInfo. Maybe dfs needs to return SearchInfo.
+
+                    child_run.store(false, Ordering::Relaxed);
+
+                } else {
+                    self.frames.push(frame); 
+                }
+            }
             if !self.step(self.frames.len()) { return false; }
         }
         return false;
     }
 }
 
+unsafe impl Send for Prover {}
+unsafe impl Sync for Prover {}
+
 impl Clone for Prover {
     // The cloned prover will not backtrack into the work of the parent prover.
     fn clone(&self) -> Self {
         let mut prover = Prover::new(self.tb_ref.clone(), self.problem_bind.clone());
-        for frame in self.frames.iter() {
+        for (index, frame) in self.frames.iter().enumerate() {
             // we assume that we always work on the last component.
             let component = prover.components.pop().unwrap();
             let mvar = frame.component.next.meta.clone();
-            let mut mvar_new = component.next.meta.clone();
-            let new_frame = Frame {
+            let mvar_new = component.next.meta.clone();
+            let mut new_frame = Frame {
                 domain: Vec::new(),
                 total_weight: frame.total_weight,
                 stats: SearchInfo::new_branch(),
@@ -209,19 +253,11 @@ impl Clone for Prover {
             };
             let db = mvar.borrow().assignment.as_ref().unwrap().head.clone();
             let linked = mvar_new.borrow().gamma.sub_es(db.0).linked.unwrap();
-            let (assn, constraints, info) = test(db, linked, mvar_new.clone()).unwrap().unwrap();
+            let element = test(db, linked, mvar_new.clone()).unwrap().unwrap();
 
-            let index = new_frame.component.parent;
-            let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-            let unassigned: Vec<W<Meta>> = [new_frame.component.beginning.as_slice(), &args, &new_frame.component.end].concat();
-            let components = split(unassigned); // we assume that split is deterministic.
-            let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
-            mvar_new.borrow_mut().assign(assn, constraints);
-            for component in components {
-                // we assume that next_new is deterministic.
-                let component = Component::new(&new_frame, component, sum, index, info.weight());
-                prover.components.push(component);
-            }
+            // we assume that next_new is deterministic.
+            let mut components = new_frame.assign(index, element);
+            prover.components.append(&mut components);
             
             prover.frames.push(new_frame);
         }
