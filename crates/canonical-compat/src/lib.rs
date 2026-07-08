@@ -178,5 +178,5 @@ pub async fn main() {
         println!("{}", now.elapsed().unwrap().as_secs_f32());
         println!("{}", IRSpine::from_body::<false>(term.whnf::<false, ()>(&mut owned_linked, &mut ()), false));
         std::process::exit(0);
-    }, true, &RUN);
+    }, true);
 }

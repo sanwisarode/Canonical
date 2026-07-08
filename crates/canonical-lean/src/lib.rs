@@ -455,7 +455,7 @@ fn main(mut prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<V
             RUN.store(false, Ordering::Relaxed);
             sender.send(()).unwrap();
         }
-    }, false, &RUN)
+    }, false)
 }
 
 pub struct Lock {

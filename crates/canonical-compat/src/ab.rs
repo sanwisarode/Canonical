@@ -36,7 +36,7 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
             [false, true].map(|enabled| {
                 configure(enabled);
                 let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
-                prover.prove(&|_| RUN.store(false, Ordering::Relaxed), false, &RUN).0
+                prover.prove(&|_| RUN.store(false, Ordering::Relaxed), false).0
             })
         }));
         let Ok([a, b]) = results else {

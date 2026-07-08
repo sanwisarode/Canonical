@@ -6,6 +6,7 @@ use crate::compiler::compile;
 use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
+use std::time::Duration;
 use rustc_hash::FxHashMap as HashMap;
 use crate::independence::split;
 
@@ -117,20 +118,17 @@ impl Prover {
     }
 
     /// Start proof search, with a callback for solutions.
-    pub fn prove<F>(&mut self, callback: &F, verbose: bool, run: &AtomicBool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
+    pub fn prove<F>(&mut self, callback: &F, verbose: bool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
         reset();
         let mut depth = 1e4;
         let mut previous_steps = 0;
         let mut acc = DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 };
         // Iterative deepening. 
-        while run.load(Ordering::Relaxed) {
+        while RUN.load(Ordering::Relaxed) {
             let max_size = ((depth as f32).ln_1p()*4.0) as usize;
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             self.components[0].fuel = depth;
-            let success = self.dfs(max_size, run);
-            if success {
-                callback(self.get_term());
-            }
+            let _ = self.dfs(max_size, callback);
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
             
             // previous_steps = result.steps;
@@ -152,7 +150,8 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, index: usize) {
+    fn backtrack(&mut self, index: usize) -> SearchInfo {
+        let mut result = SearchInfo::new_branch();
         while self.frames.len() > index {
             let mut frame = self.frames.pop().unwrap();
             frame.stats.add_branch(&frame.component.next.meta.borrow_mut().unassign());
@@ -161,13 +160,15 @@ impl Prover {
 
             self.components.truncate(frame.truncate);
             self.components.push(frame.component);
+            result = frame.stats;
         }
+        return result;
     }
 
-    fn step(&mut self, mut index: usize) -> bool {
+    fn step(&mut self, mut index: usize) -> Option<SearchInfo> {
         'outer: loop {
-            self.backtrack(index);
-            let Some(frame) = self.frames.get_mut(index - 1) else { return false; };
+            let result = self.backtrack(index);
+            let Some(frame) = self.frames.get_mut(if index == 0 { 0 } else { index - 1 }) else { return Some(result); };
             if let Some(element) = frame.domain.pop() {
                 let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
                 frame.stats.add_branch(&assn_stats); 
@@ -175,60 +176,69 @@ impl Prover {
 
                 let mut components = frame.assign(index, element);
 
-                if !components.iter().any(Component::prune) {
+                if components.iter().any(Component::prune) {
                     index = frame.component.parent;
                     continue 'outer;
                 }
 
                 self.components.append(&mut components);
-
-                return true;
+                return None;
             }
             index = frame.component.parent;
         }
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
-        return false;
+        return NUM_JOBS.load(Ordering::Relaxed) < 100 && 
+            frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
     }
 
-    fn dfs(&mut self, max_size: usize, run: &AtomicBool) -> bool {
-        while run.load(Ordering::Relaxed) {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F) -> SearchInfo where F: Fn(Term) + Send + Sync {
+        while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
-            let Some(component) = self.components.pop() else { return true };
-            if self.frames.len() < max_size { 
-                let mut frame = Frame::new(component, self.components.len());
-                if self.parallelize(&frame) {
-                    let mut provers = Vec::new();
-                    let mut domain = Vec::new();
-                    domain.append(&mut frame.domain); // ownership hack
-                    while let Some(element) = domain.pop() {
-                        // no need to add components.
-                        let _components = frame.assign(self.frames.len() + 1, element);
-                        
-                        self.frames.push(frame);
+            if let Some(component) = self.components.pop() {
+                if self.frames.len() < max_size { 
+                    let mut frame = Frame::new(component, self.components.len());
+                    if self.parallelize(&frame) {
+                        let mut provers = Vec::new();
+                        let mut domain = Vec::new();
+                        domain.append(&mut frame.domain); // ownership hack
+                        while let Some(element) = domain.pop() {
+                            // no need to add components.
+                            let _components = frame.assign(self.frames.len() + 1, element);
+                            
+                            self.frames.push(frame);
 
-                        provers.push(self.clone());
-                        
-                        // regain ownership
-                        frame = self.frames.pop().unwrap();
+                            provers.push(self.clone());
+                            
+                            // regain ownership
+                            frame = self.frames.pop().unwrap();
+                        }
+
+                        let options = provers.len();
+                        NUM_JOBS.fetch_add(options, Ordering::Relaxed);
+
+                        let acc = provers.into_par_iter().map(|mut prover| {
+                            let mut result = SearchInfo::new_branch();
+                            result.add_branch(&prover.dfs(max_size, callback));
+                            result
+                        }).reduce(SearchInfo::new_branch, |mut a, b| {
+                            a.add_branch(&b);
+                            a
+                        });
+
+                        NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
+
+                        frame.stats.add_branch(&acc);
+                        return frame.stats;
+                    } else {
+                        self.frames.push(frame); 
                     }
-
-                    let child_run = AtomicBool::new(true);
-
-                    let result = provers.into_par_iter().any(|mut prover| prover.dfs(max_size, &child_run));
-                    // perform the successful assignment. Why don't we use callbacks, again?
-                    // also, we need to obtain the SearchInfo. Maybe dfs needs to return SearchInfo.
-
-                    child_run.store(false, Ordering::Relaxed);
-
-                } else {
-                    self.frames.push(frame); 
                 }
-            }
-            if !self.step(self.frames.len()) { return false; }
+            } else { callback(self.get_term()) }
+            if let Some(result) = self.step(self.frames.len()) { return result; }
         }
-        return false;
+        return SearchInfo::new_branch(); // TODO
     }
 }
 
@@ -251,12 +261,12 @@ impl Clone for Prover {
                 truncate: frame.truncate,
                 component
             };
-            let db = mvar.borrow().assignment.as_ref().unwrap().head.clone();
+            let db: DeBruijnIndex = mvar.borrow().assignment.as_ref().unwrap().head.clone();
             let linked = mvar_new.borrow().gamma.sub_es(db.0).linked.unwrap();
             let element = test(db, linked, mvar_new.clone()).unwrap().unwrap();
 
             // we assume that next_new is deterministic.
-            let mut components = new_frame.assign(index, element);
+            let mut components = new_frame.assign(index+1, element);
             prover.components.append(&mut components);
             
             prover.frames.push(new_frame);
