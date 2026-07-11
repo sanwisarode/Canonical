@@ -1,11 +1,8 @@
 use crate::core::*;
 use crate::heuristic::*;
-use crate::independence::involved;
 use crate::memory::{S, W, WVec};
 use crate::stats::*;
 use std::sync::atomic::AtomicBool;
-use std::cmp::Ordering;
-use std::collections::HashMap;
 
 /// Set `RUN` to false to cancel terminate the ongoing problem.
 pub static RUN: AtomicBool = AtomicBool::new(true);
@@ -113,8 +110,7 @@ impl Next {
 
 pub struct NextNew {
     pub next: MetaInfo,
-    pub index: usize,
-    pub entropy: f64
+    pub index: usize
 }
 
 impl Meta {
@@ -152,51 +148,37 @@ impl Meta {
     //     }
     // }
 
-    pub fn next_new(unassigned: &Vec<W<Meta>>) -> NextNew {
-        let mut involved_inverse: HashMap<W<Meta>, Vec<usize>> = HashMap::new();
-        for (source_index, mvar) in unassigned.iter().enumerate() {
-            for target in involved(mvar.clone()) {
-                involved_inverse.entry(target).or_default().push(source_index);
-            }
-        }
-
-        // Do not pick a metavariable if another candidate may generate constraints
-        // on it or on one of its assigned ancestors.
-        let mut blocked = vec![false; unassigned.len()];
-        for (target_index, mvar) in unassigned.iter().enumerate() {
-            let mut parent = Some(mvar);
-            while let Some(p) = parent {
-                if let Some(sources) = involved_inverse.get(p) {
-                    if sources.iter().any(|&source_index| source_index != target_index) {
-                        blocked[target_index] = true;
-                        break;
-                    }
-                }
-                parent = p.borrow().parent.as_ref().clone();
-            }
-        }
+    pub fn next_new(unassigned: &Vec<W<Meta>>, eligible: &[bool]) -> NextNew {
+        assert_eq!(unassigned.len(), eligible.len());
 
         let mut infos = Vec::with_capacity(unassigned.len());
-        let mut entropy = 1.0;
+        let mut rigid_index = None;
 
-        for mvar in unassigned.iter() {
+        for (i, mvar) in unassigned.iter().enumerate() {
             let info = MetaInfo::new(mvar.clone());
-            entropy = entropy*info.difficulty();
+            if info.has_rigid_equation && rigid_index.is_none() {
+                rigid_index = Some(i);
+            }
             infos.push(info);
+        }
+
+        if let Some(index) = rigid_index {
+            let result = infos.remove(index);
+            return NextNew { next: result, index }
         }
 
         let mut fallback_index = 0;
         let mut eligible_index: Option<usize> = None;
         for i in 0..infos.len() {
-            if matches!(next_new(&infos[fallback_index], &infos[i]), Ordering::Greater) {
+            if infos[i].difficulty() > infos[fallback_index].difficulty() {
                 fallback_index = i;
             }
 
-            if !blocked[i] {
+            if eligible[i] {
                 match eligible_index {
                     None => eligible_index = Some(i),
                     Some(current) => {
-                        if matches!(next_new(&infos[current], &infos[i]), Ordering::Greater) {
+                        if infos[i].difficulty() > infos[current].difficulty() {
                             eligible_index = Some(i);
                         }
                     }
@@ -207,6 +189,6 @@ impl Meta {
         let index = eligible_index.unwrap_or(fallback_index);
         let result = infos.remove(index);
 
-        return NextNew { next: result, index, entropy }
+        return NextNew { next: result, index }
     }
 }

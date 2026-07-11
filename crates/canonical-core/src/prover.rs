@@ -8,7 +8,7 @@ use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use std::time::Duration;
 use rustc_hash::FxHashMap as HashMap;
-use crate::independence::split;
+use crate::independence::{split, SplitComponent};
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -61,7 +61,7 @@ impl Frame {
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
         let unassigned = [self.component.beginning.as_slice(), &args, &self.component.end].concat();
         let components = split(unassigned);
-        let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
+        let sum: f64 = components.iter().map(|component| component.entropy).sum();
         self.component.next.meta.borrow_mut().assign(assn, constraints);
         components.into_iter().map(|component|
             Component::new(self, component, sum, index, info.weight())
@@ -70,14 +70,14 @@ impl Frame {
 }
 
 impl Component {
-    fn new(frame: &Frame, component: (Vec<W<Meta>>, f64), sum: f64, parent: usize, weight: f64) -> Self {
-        let mut next = Meta::next_new(&component.0);
+    fn new(frame: &Frame, component: SplitComponent, sum: f64, parent: usize, weight: f64) -> Self {
+        let mut next = Meta::next_new(&component.unassigned, &component.eligible);
         next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
-        let (beginning, end) = component.0.split_at(next.index);
+        let (beginning, end) = component.unassigned.split_at(next.index);
         Component {
             fuel: frame.component.fuel * (weight / frame.total_weight),
-            meta_entropy: component.1,
-            extra_entropy: frame.component.extra_entropy + sum - component.1,
+            meta_entropy: component.entropy,
+            extra_entropy: frame.component.extra_entropy + sum - component.entropy,
             next: next.next,
             beginning: beginning.to_vec(),
             end: end[1..].to_vec(),
