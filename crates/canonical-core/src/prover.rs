@@ -22,9 +22,8 @@ struct Frame {
 }
 
 struct Component {
-    beginning: Vec<W<Meta>>,
+    unassigned: Vec<W<Meta>>,
     next: MetaInfo,
-    end: Vec<W<Meta>>,
     fuel: f64,
     meta_entropy: f64,
     extra_entropy: f64,
@@ -59,7 +58,8 @@ impl Frame {
     fn assign(&mut self, index: usize, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<Component> {
         let (assn, constraints, info) = element;
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-        let unassigned = [self.component.beginning.as_slice(), &args, &self.component.end].concat();
+        let mut unassigned = self.component.unassigned.clone();
+        unassigned.extend(args);
         let components = split(unassigned);
         let sum: f64 = components.iter().map(|component| component.entropy).sum();
         self.component.next.meta.borrow_mut().assign(assn, constraints);
@@ -73,14 +73,15 @@ impl Component {
     fn new(frame: &Frame, component: SplitComponent, sum: f64, parent: usize, weight: f64) -> Self {
         let mut next = Meta::next_new(&component.unassigned, &component.eligible);
         next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
-        let (beginning, end) = component.unassigned.split_at(next.index);
+        let mut unassigned = component.unassigned;
+        // we use swap_remvoe for O(1) complexity since ordering does not matter anymore
+        unassigned.swap_remove(next.index);
         Component {
             fuel: frame.component.fuel * (weight / frame.total_weight),
             meta_entropy: component.entropy,
             extra_entropy: frame.component.extra_entropy + sum - component.entropy,
             next: next.next,
-            beginning: beginning.to_vec(),
-            end: end[1..].to_vec(),
+            unassigned,
             parent
         }   
     }
@@ -107,7 +108,7 @@ impl Prover {
         let meta = S::new(Meta::new(ty));
         Prover { 
             frames: Vec::new(), 
-            components: vec![Component { beginning: Vec::new(), next: MetaInfo::new(meta.downgrade()), end: Vec::new(), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }], 
+            components: vec![Component { unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }], 
             meta, tb_ref, problem_bind, _owned_linked: owned_linked 
         }
     }
