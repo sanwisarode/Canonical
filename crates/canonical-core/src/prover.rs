@@ -205,13 +205,14 @@ impl Prover {
                         let mut domain = Vec::new();
                         domain.append(&mut frame.domain); // ownership hack
                         while let Some(element) = domain.pop() {
+                            frame.component.next.meta.borrow_mut().unassign();
                             // no need to add components.
                             let _components = frame.assign(self.frames.len() + 1, element);
-                            
+
                             self.frames.push(frame);
 
                             provers.push(self.clone());
-                            
+
                             // regain ownership
                             frame = self.frames.pop().unwrap();
                         }
@@ -231,7 +232,11 @@ impl Prover {
                         NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
 
                         frame.stats.add_branch(&acc);
-                        return frame.stats;
+                        let stats = frame.stats.clone();
+                        self.frames.push(frame);
+                        self.backtrack(0);
+                        return stats;
+
                     } else {
                         self.frames.push(frame); 
                     }
