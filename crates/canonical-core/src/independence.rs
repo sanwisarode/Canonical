@@ -1,6 +1,7 @@
 use crate::core::*;
 use crate::memory::*;
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, BuildHasherDefault};
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
 
 /// The metavariables whose assignments may interact with `mvar`.
@@ -28,12 +29,12 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 
 /// Partition the unassigned metavariables under `root` into independent components.
 pub fn split(unassigned: Vec<W<Meta>>) -> Vec<(Vec<W<Meta>>, f64)> {
-    let mut indices = HashMap::new();
+    let mut indices: HashMap<W<Meta>, usize, BuildHasherDefault<DefaultHasher>> = HashMap::default();
     for (i, x) in unassigned.iter().enumerate() {
         indices.insert(x.clone(), i);
     }
 
-    let mut involved_inverse: HashMap<W<Meta>, Vec<W<Meta>>> = HashMap::new();
+    let mut involved_inverse: HashMap<W<Meta>, Vec<W<Meta>>, BuildHasherDefault<DefaultHasher>> = HashMap::default();
     for mvar in unassigned.iter() {
         for i in involved(mvar.clone()).iter() {
             if !involved_inverse.contains_key(&i) {
@@ -59,7 +60,7 @@ pub fn split(unassigned: Vec<W<Meta>>) -> Vec<(Vec<W<Meta>>, f64)> {
         }
     }
 
-    let mut buckets: HashMap<usize, Vec<W<Meta>>> = HashMap::new();
+    let mut buckets: HashMap<usize, Vec<W<Meta>>, BuildHasherDefault<DefaultHasher>> = HashMap::default();
     for (i, mvar) in unassigned.iter().enumerate() {
         let r = uf.find(i);
         buckets.entry(r).or_default().push(mvar.clone());
