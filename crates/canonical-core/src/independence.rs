@@ -13,13 +13,15 @@ pub struct SplitComponent {
 }
 
 /// The metavariables whose assignments may interact with `mvar`.
-pub fn involved(mvar: W<Meta>) -> Vec<W<Meta>> {
+fn involved(mvar: W<Meta>) -> Vec<(W<Meta>, bool)> {
     let typ = mvar.borrow().typ.as_ref().unwrap();
-    let mut result = typ.1.get_many(&typ.0.borrow().codomain_mvars);
-    result.extend(mvar.borrow().gamma.involved());
+    let codomain: Vec<(W<Meta>, bool)> = typ.1.get_many(&typ.0.borrow().codomain_mvars).into_iter().map(|x| (x, true)).collect();
+    let mut constraints = mvar.borrow().gamma.involved();
     for constraint in &mvar.borrow().constraints {
-        result.extend(constraint.involved())
+        constraints.extend(constraint.involved())
     }
+    let mut result: Vec<(W<Meta>, bool)> = constraints.into_iter().map(|x| (x, false)).collect();
+    result.extend(codomain);
     return result;
 }
 
@@ -37,57 +39,56 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 
 /// Partition the unassigned metavariables under `root` into independent components.
 pub fn split(unassigned: Vec<W<Meta>>) -> Vec<SplitComponent> {
-    let mut indices: HashMap<W<Meta>, usize, BuildHasherDefault<DefaultHasher>> = HashMap::default();
+    let mut indices: HashMap<W<Meta>, usize> = HashMap::default();
     for (i, x) in unassigned.iter().enumerate() {
         indices.insert(x.clone(), i);
     }
 
-    let mut eligible = vec![true; unassigned.len()];
-    let mut involved_inverse: HashMap<W<Meta>, Vec<W<Meta>>, BuildHasherDefault<DefaultHasher>> = HashMap::default();
-    for (source_index, mvar) in unassigned.iter().enumerate() {
-        let typ = mvar.borrow().typ.as_ref().unwrap();
-        for target in typ.1.get_many(&typ.0.borrow().codomain_mvars) {
-            if let Some(&target_index) = indices.get(&target) {
-                if target_index != source_index {
-                    eligible[target_index] = false;
-                }
-            }
-        }
-        for i in involved(mvar.clone()).iter() {
+    let mut involved_inverse: HashMap<W<Meta>, Vec<(W<Meta>, bool)>> = HashMap::new();
+    for mvar in unassigned.iter() {
+        for (i, codomain) in involved(mvar.clone()).into_iter() {
             if !involved_inverse.contains_key(&i) {
                 involved_inverse.insert(i.clone(), Vec::new());
             }
-            let arr = involved_inverse.get_mut(i).unwrap();
-            if arr.last() != Some(mvar) {
-                arr.push(mvar.clone());
-            }
+            let arr = involved_inverse.get_mut(&i).unwrap();
+            arr.push((mvar.clone(), codomain)); // TODO missing optimization if it's already at the last.
         }
     }
 
     let mut uf = QuickUnionUf::<UnionBySize>::new(unassigned.len());
+    let mut eligible: Vec<bool> = vec![true; unassigned.len()];
     for (i, mvar) in unassigned.iter().enumerate() {
         let mut parent = Some(mvar);
         while let Some(p) = parent {
             if let Some(arr) = involved_inverse.get(p) {
-                for o in arr {
+                for (o, codomain) in arr {
                     uf.union(i, *indices.get(o).unwrap());
+                    if *codomain {
+                        eligible[indices[mvar]] = false;
+                    }
                 }
             }
             parent = p.borrow().parent.as_ref().clone();
         }
     }
 
-    let mut buckets: HashMap<usize, (Vec<W<Meta>>, Vec<bool>), BuildHasherDefault<DefaultHasher>> = HashMap::default();
+    let mut buckets: Vec<Vec<W<Meta>>> = Vec::new();
+    let mut slots: Vec<Option<usize>> = vec![None; unassigned.len()];
     for (i, mvar) in unassigned.iter().enumerate() {
         let r = uf.find(i);
-        let bucket = buckets.entry(r).or_default();
-        bucket.0.push(mvar.clone());
-        bucket.1.push(eligible[i]);
+        if let Some(slot) = slots[r] {
+            buckets[slot].push(mvar.clone());
+        } else {
+            slots[r] = Some(buckets.len());
+            buckets.push(vec![mvar.clone()])
+        }
     }
-    buckets.into_values().map(|(unassigned, eligible)| {
+
+    buckets.into_iter().map(|unassigned| {
         let entropy = unassigned.iter().map(|mvar|
             MetaInfo::new(mvar.clone()).difficulty()
         ).product();
+        let eligible = unassigned.iter().map(|x| eligible[indices[x]]).collect();
         SplitComponent { unassigned, eligible, entropy }
     }).collect()
 }

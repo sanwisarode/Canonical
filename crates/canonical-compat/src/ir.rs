@@ -11,20 +11,20 @@ use std::collections::HashSet;
 use std::any::Any;
 
 /// Render the metavariables involved with `meta`, each labeled with its name and the constraints stuck on it.
-fn involved_html(meta: W<Meta>) -> String {
-    let mut seen = HashSet::new();
-    canonical_core::independence::involved(meta).into_iter()
-        .filter(|m| seen.insert(m.borrow() as *const Meta as usize))
-        .map(|m| {
-            // Argument/substitution metavariables have no type (see `to_body`), so don't assume one.
-            let name = match m.borrow().typ.as_ref() {
-                Some(typ) => "?&NoBreak;".to_string() + &typ.2.borrow().name,
-                None => "?".to_string(),
-            };
-            format!("<div class='involved'><span class='meta'>{name}</span></div>")
-        })
-        .collect()
-}
+// fn involved_html(meta: W<Meta>) -> String {
+//     let mut seen = HashSet::new();
+//     canonical_core::independence::involved(meta).into_iter()
+//         .filter(|m| seen.insert(m.borrow() as *const Meta as usize))
+//         .map(|m| {
+//             // Argument/substitution metavariables have no type (see `to_body`), so don't assume one.
+//             let name = match m.borrow().typ.as_ref() {
+//                 Some(typ) => "?&NoBreak;".to_string() + &typ.2.borrow().name,
+//                 None => "?".to_string(),
+//             };
+//             format!("<div class='involved'><span class='meta'>{name}</span></div>")
+//         })
+//         .collect()
+// }
 
 /// Render a constraint stuck on a metavariable for the debug tooltip, recovering its concrete type.
 fn constraint_html(c: &dyn Constraint, owned_linked: &mut Vec<S<Linked>>) -> String {
@@ -228,7 +228,7 @@ impl IRSpine {
             .map(|c| constraint_html(c.as_ref(), &mut owned_linked))
             .fold("".to_string(), |a, b| a + &b);
         // Also surface the metavariables involved with this one, each with their own constraints.
-        let inner = own + &involved_html(meta.clone());
+        let inner = own; //+ &involved_html(meta.clone());
         let constraints = if inner.is_empty() {
             "".to_string()
         } else {

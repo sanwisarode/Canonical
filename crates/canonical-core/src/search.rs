@@ -167,10 +167,17 @@ impl Meta {
             return NextNew { next: result, index }
         }
 
+        // #NEW BEG
+        // Metric: how quickly assigning this mvar increases the entropy (its difficulty),
+        // relative to how much it branches the search.
+        let metrics: Vec<f64> = infos.iter().map(|info|
+            info.difficulty()
+        ).collect();
+
         let mut fallback_index = 0;
         let mut eligible_index: Option<usize> = None;
         for i in 0..infos.len() {
-            if infos[i].difficulty() > infos[fallback_index].difficulty() {
+            if metrics[i] > metrics[fallback_index] {
                 fallback_index = i;
             }
 
@@ -178,13 +185,14 @@ impl Meta {
                 match eligible_index {
                     None => eligible_index = Some(i),
                     Some(current) => {
-                        if infos[i].difficulty() > infos[current].difficulty() {
+                        if metrics[i] > metrics[current] {
                             eligible_index = Some(i);
                         }
                     }
                 }
             }
         }
+        // #NEW END
 
         let index = eligible_index.unwrap_or(fallback_index);
         let result = infos.remove(index);

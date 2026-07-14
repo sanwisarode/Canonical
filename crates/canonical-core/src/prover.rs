@@ -190,6 +190,7 @@ impl Prover {
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
+        // return false;
         return NUM_JOBS.load(Ordering::Relaxed) < 100 && 
             frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
     }
@@ -207,13 +208,12 @@ impl Prover {
                         while let Some(element) = domain.pop() {
                             // no need to add components.
                             let _components = frame.assign(self.frames.len() + 1, element);
-                            
                             self.frames.push(frame);
-
                             provers.push(self.clone());
-                            
+
                             // regain ownership
                             frame = self.frames.pop().unwrap();
+                            frame.component.next.meta.borrow_mut().unassign();
                         }
 
                         let options = provers.len();
@@ -231,7 +231,11 @@ impl Prover {
                         NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
 
                         frame.stats.add_branch(&acc);
-                        return frame.stats;
+                        let stats = frame.stats.clone();
+                        self.frames.push(frame);
+                        self.backtrack(0);
+                        return stats;
+
                     } else {
                         self.frames.push(frame); 
                     }
@@ -246,13 +250,11 @@ impl Prover {
 unsafe impl Send for Prover {}
 unsafe impl Sync for Prover {}
 
-impl Clone for Prover {
-    // The cloned prover will not backtrack into the work of the parent prover.
-    fn clone(&self) -> Self {
-        let mut prover = Prover::new(self.tb_ref.clone(), self.problem_bind.clone());
-        for (index, frame) in self.frames.iter().enumerate() {
+impl Prover {
+    fn replay(&mut self, child: &Prover) {
+        for (index, frame) in child.frames.iter().enumerate().skip(self.frames.len()) {
             // we assume that we always work on the last component.
-            let component = prover.components.pop().unwrap();
+            let component = self.components.pop().unwrap();
             let mvar = frame.component.next.meta.clone();
             let mvar_new = component.next.meta.clone();
             let mut new_frame = Frame {
@@ -268,10 +270,18 @@ impl Clone for Prover {
 
             // we assume that next_new is deterministic.
             let mut components = new_frame.assign(index+1, element);
-            prover.components.append(&mut components);
+            self.components.append(&mut components);
             
-            prover.frames.push(new_frame);
+            self.frames.push(new_frame);
         }
+    }
+}
+
+impl Clone for Prover {
+    // The cloned prover will not backtrack into the work of the parent prover.
+    fn clone(&self) -> Self {
+        let mut prover = Prover::new(self.tb_ref.clone(), self.problem_bind.clone());
+        prover.replay(self);
         prover
     }
 }
