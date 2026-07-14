@@ -251,6 +251,53 @@ impl Prover {
 unsafe impl Send for Prover {}
 unsafe impl Sync for Prover {}
 
+// #NEW BEG
+impl Prover {
+
+    fn transfer_assignments(source: W<Meta>, mut dest: W<Meta>, map: &mut HashMap<W<Meta>, W<Meta>>) {
+        map.insert(source.clone(), dest.clone());
+
+        // Nothing to copy from an unassigned source, leave dest unassigned.
+        let head = match &source.borrow().assignment {
+            None => return,
+            Some(assignment) => assignment.head.clone(),
+        };
+
+        // Reconstruct the same assignment on dest if it isn't already present.
+        if dest.borrow().assignment.is_none() {
+            let linked = dest.borrow().gamma.sub_es(head.0).linked.unwrap();
+            let (assn, constraints, _) = test(head, linked, dest.clone()).unwrap().unwrap();
+            dest.borrow_mut().assign(assn, constraints);
+        }
+
+        // The arguments now exist on both sides, recurse pairwise.
+        let source_args: Vec<W<Meta>> = source.borrow().assignment.as_ref().unwrap()
+            .args.iter().map(|a| a.downgrade()).collect();
+        let dest_args: Vec<W<Meta>> = dest.borrow().assignment.as_ref().unwrap()
+            .args.iter().map(|a| a.downgrade()).collect();
+        for (s, d) in source_args.into_iter().zip(dest_args) {
+            Prover::transfer_assignments(s, d, map);
+        }
+    }
+
+    /// Clone this prover's assignment tree onto a fresh prover, also returning a
+    /// map from each of this prover's metavariables
+    pub fn clone_with_map(&self) -> (Prover, HashMap<W<Meta>, W<Meta>>) {
+        let clone = Prover::new(self.tb_ref.clone(), self.problem_bind.clone());
+        let mut map: HashMap<W<Meta>, W<Meta>> = HashMap::default();
+        Prover::transfer_assignments(self.meta.downgrade(), clone.meta.downgrade(), &mut map);
+        (clone, map)
+    }
+
+    /// Graft the assignments made on a clone back onto this prover
+    pub fn graft(&mut self, map: &HashMap<W<Meta>, W<Meta>>) {
+        let clone_root = map.get(&self.meta.downgrade()).unwrap().clone();
+        let mut correspondence: HashMap<W<Meta>, W<Meta>> = HashMap::default();
+        Prover::transfer_assignments(clone_root, self.meta.downgrade(), &mut correspondence);
+    }
+}
+// #NEW END
+
 impl Clone for Prover {
     // The cloned prover will not backtrack into the work of the parent prover.
     fn clone(&self) -> Self {
