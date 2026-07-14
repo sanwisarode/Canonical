@@ -1,8 +1,16 @@
 use crate::core::*;
 use crate::memory::*;
+use crate::stats::MetaInfo;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, BuildHasherDefault};
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
+
+/// An independent component and the information used to choose its next metavariable.
+pub struct SplitComponent {
+    pub unassigned: Vec<W<Meta>>,
+    pub eligible: Vec<bool>,
+    pub entropy: f64
+}
 
 /// The metavariables whose assignments may interact with `mvar`.
 pub fn involved(mvar: W<Meta>) -> Vec<W<Meta>> {
@@ -28,14 +36,23 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 }
 
 /// Partition the unassigned metavariables under `root` into independent components.
-pub fn split(unassigned: Vec<W<Meta>>) -> Vec<(Vec<W<Meta>>, f64)> {
+pub fn split(unassigned: Vec<W<Meta>>) -> Vec<SplitComponent> {
     let mut indices: HashMap<W<Meta>, usize, BuildHasherDefault<DefaultHasher>> = HashMap::default();
     for (i, x) in unassigned.iter().enumerate() {
         indices.insert(x.clone(), i);
     }
 
+    let mut eligible = vec![true; unassigned.len()];
     let mut involved_inverse: HashMap<W<Meta>, Vec<W<Meta>>, BuildHasherDefault<DefaultHasher>> = HashMap::default();
-    for mvar in unassigned.iter() {
+    for (source_index, mvar) in unassigned.iter().enumerate() {
+        let typ = mvar.borrow().typ.as_ref().unwrap();
+        for target in typ.1.get_many(&typ.0.borrow().codomain_mvars) {
+            if let Some(&target_index) = indices.get(&target) {
+                if target_index != source_index {
+                    eligible[target_index] = false;
+                }
+            }
+        }
         for i in involved(mvar.clone()).iter() {
             if !involved_inverse.contains_key(&i) {
                 involved_inverse.insert(i.clone(), Vec::new());
@@ -60,15 +77,17 @@ pub fn split(unassigned: Vec<W<Meta>>) -> Vec<(Vec<W<Meta>>, f64)> {
         }
     }
 
-    let mut buckets: HashMap<usize, Vec<W<Meta>>, BuildHasherDefault<DefaultHasher>> = HashMap::default();
+    let mut buckets: HashMap<usize, (Vec<W<Meta>>, Vec<bool>), BuildHasherDefault<DefaultHasher>> = HashMap::default();
     for (i, mvar) in unassigned.iter().enumerate() {
         let r = uf.find(i);
-        buckets.entry(r).or_default().push(mvar.clone());
+        let bucket = buckets.entry(r).or_default();
+        bucket.0.push(mvar.clone());
+        bucket.1.push(eligible[i]);
     }
-    // buckets.into_values().collect()
-    // pair each component with its entropy
-    buckets.into_values().map(|component| {
-        let entropy = Meta::next_new(&component).entropy;
-        (component, entropy)
+    buckets.into_values().map(|(unassigned, eligible)| {
+        let entropy = unassigned.iter().map(|mvar|
+            MetaInfo::new(mvar.clone()).difficulty()
+        ).product();
+        SplitComponent { unassigned, eligible, entropy }
     }).collect()
 }

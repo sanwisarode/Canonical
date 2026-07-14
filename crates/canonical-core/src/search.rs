@@ -3,7 +3,6 @@ use crate::heuristic::*;
 use crate::memory::{S, W, WVec};
 use crate::stats::*;
 use std::sync::atomic::AtomicBool;
-use std::cmp::Ordering;
 
 /// Set `RUN` to false to cancel terminate the ongoing problem.
 pub static RUN: AtomicBool = AtomicBool::new(true);
@@ -111,8 +110,7 @@ impl Next {
 
 pub struct NextNew {
     pub next: MetaInfo,
-    pub index: usize,
-    pub entropy: f64
+    pub index: usize
 }
 
 impl Meta {
@@ -150,23 +148,47 @@ impl Meta {
     //     }
     // }
 
-    
+    pub fn next_new(unassigned: &Vec<W<Meta>>, eligible: &[bool]) -> NextNew {
+        assert_eq!(unassigned.len(), eligible.len());
 
-    pub fn next_new(unassigned: &Vec<W<Meta>>) -> NextNew {
-        let mut result = MetaInfo::new(unassigned.first().unwrap().clone());
-        let mut index = 0;
-        let mut entropy = 1.0;
+        let mut infos = Vec::with_capacity(unassigned.len());
+        let mut rigid_index = None;
 
         for (i, mvar) in unassigned.iter().enumerate() {
-            let contender = MetaInfo::new(mvar.clone());
-            entropy = entropy*contender.difficulty();
-            if matches!(next_new(&result, &contender), Ordering::Greater)  {
-                result = contender;
-                index = i;
+            let info = MetaInfo::new(mvar.clone());
+            if info.has_rigid_equation && rigid_index.is_none() {
+                rigid_index = Some(i);
+            }
+            infos.push(info);
+        }
+
+        if let Some(index) = rigid_index {
+            let result = infos.remove(index);
+            return NextNew { next: result, index }
+        }
+
+        let mut fallback_index = 0;
+        let mut eligible_index: Option<usize> = None;
+        for i in 0..infos.len() {
+            if infos[i].difficulty() > infos[fallback_index].difficulty() {
+                fallback_index = i;
+            }
+
+            if eligible[i] {
+                match eligible_index {
+                    None => eligible_index = Some(i),
+                    Some(current) => {
+                        if infos[i].difficulty() > infos[current].difficulty() {
+                            eligible_index = Some(i);
+                        }
+                    }
+                }
             }
         }
 
-        return NextNew { next: result, index, entropy }
+        let index = eligible_index.unwrap_or(fallback_index);
+        let result = infos.remove(index);
+
+        return NextNew { next: result, index }
     }
 }
-
