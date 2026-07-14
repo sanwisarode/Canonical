@@ -2,7 +2,6 @@ use crate::core::*;
 use crate::memory::*;
 use crate::stats::MetaInfo;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, BuildHasherDefault};
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
 
 /// An independent component and the information used to choose its next metavariable.
