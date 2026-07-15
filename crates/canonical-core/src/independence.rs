@@ -4,10 +4,14 @@ use crate::stats::MetaInfo;
 use std::collections::HashMap;
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
 
+pub struct NextInfo {
+    pub meta: W<Meta>,
+    pub eligible: bool    
+}
+
 /// An independent component and the information used to choose its next metavariable.
 pub struct SplitComponent {
-    pub unassigned: Vec<W<Meta>>,
-    pub eligible: Vec<bool>,
+    pub unassigned: Vec<NextInfo>,
     pub entropy: f64
 }
 
@@ -71,23 +75,22 @@ pub fn split(unassigned: Vec<W<Meta>>) -> Vec<SplitComponent> {
         }
     }
 
-    let mut buckets: Vec<Vec<W<Meta>>> = Vec::new();
+    let mut buckets: Vec<Vec<NextInfo>> = Vec::new();
     let mut slots: Vec<Option<usize>> = vec![None; unassigned.len()];
     for (i, mvar) in unassigned.iter().enumerate() {
         let r = uf.find(i);
         if let Some(slot) = slots[r] {
-            buckets[slot].push(mvar.clone());
+            buckets[slot].push(NextInfo { meta: mvar.clone(), eligible: eligible[indices[mvar]] });
         } else {
             slots[r] = Some(buckets.len());
-            buckets.push(vec![mvar.clone()])
+            buckets.push(vec![NextInfo { meta: mvar.clone(), eligible: eligible[indices[mvar]] }])
         }
     }
 
     buckets.into_iter().map(|unassigned| {
         let entropy = unassigned.iter().map(|mvar|
-            MetaInfo::new(mvar.clone()).difficulty()
+            MetaInfo::new(mvar.meta.clone()).difficulty()
         ).product();
-        let eligible = unassigned.iter().map(|x| eligible[indices[x]]).collect();
-        SplitComponent { unassigned, eligible, entropy }
+        SplitComponent { unassigned, entropy }
     }).collect()
 }

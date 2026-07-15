@@ -71,9 +71,9 @@ impl Frame {
 
 impl Component {
     fn new(frame: &Frame, component: SplitComponent, sum: f64, parent: usize, weight: f64) -> Self {
-        let mut next = Meta::next_new(&component.unassigned, &component.eligible);
+        let mut next = Meta::next_new(&component.unassigned);
         next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
-        let mut unassigned = component.unassigned;
+        let mut unassigned: Vec<W<Meta>> = component.unassigned.iter().map(|x| x.meta.clone()).collect(); // TODO temporary hack
         // we use swap_remvoe for O(1) complexity since ordering does not matter anymore
         unassigned.swap_remove(next.index);
         Component {

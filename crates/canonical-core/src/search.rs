@@ -3,6 +3,7 @@ use crate::heuristic::*;
 use crate::memory::{S, W, WVec};
 use crate::stats::*;
 use std::sync::atomic::AtomicBool;
+use crate::independence::NextInfo;
 
 /// Set `RUN` to false to cancel terminate the ongoing problem.
 pub static RUN: AtomicBool = AtomicBool::new(true);
@@ -148,35 +149,23 @@ impl Meta {
     //     }
     // }
 
-    pub fn next_new(unassigned: &Vec<W<Meta>>, eligible: &[bool]) -> NextNew {
-        assert_eq!(unassigned.len(), eligible.len());
-
+    pub fn next_new(unassigned: &Vec<NextInfo>) -> NextNew {
         let mut infos = Vec::with_capacity(unassigned.len());
-        let mut rigid_index = None;
+        for (i, mvar) in unassigned.into_iter().enumerate() {
+            let info = MetaInfo::new(mvar.meta.clone());
+            let has_rigid_equation = info.has_rigid_equation;
+            let next = NextNew { next: info, index: i };
+            if has_rigid_equation { return next }
+            if mvar.eligible { infos.push(next); }
+        }
 
-        for (i, mvar) in unassigned.iter().enumerate() {
-            let info = MetaInfo::new(mvar.clone());
-            if info.has_rigid_equation && rigid_index.is_none() {
-                rigid_index = Some(i);
+        let mut best = infos.pop().expect("No eligible mvars!");
+        for info in infos.into_iter() {
+            if info.next.difficulty() > best.next.difficulty() {
+                best = info;
             }
-            infos.push(info);
         }
 
-        if let Some(index) = rigid_index {
-            let result = infos.remove(index);
-            return NextNew { next: result, index }
-        }
-
-        let hardest = infos.iter()
-            .map(MetaInfo::difficulty)
-            .enumerate()
-            .filter(|&(idx , _)| eligible[idx])
-            .max_by(|&(_, diff1), &(_, diff2)| diff1.total_cmp(&diff2))
-            .map(|(idx, _)| idx)
-            .unwrap_or(0);
-
-        let result = infos.remove(hardest);
-
-        return NextNew { next: result, index: hardest }
+        return best
     }
 }
