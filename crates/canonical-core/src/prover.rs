@@ -190,9 +190,9 @@ impl Prover {
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
-        // return false;
-        return NUM_JOBS.load(Ordering::Relaxed) < 100 && 
-            frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
+        return false;
+        // return NUM_JOBS.load(Ordering::Relaxed) < 100 && 
+        //     frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
     }
 
     fn dfs<F>(&mut self, max_size: usize, callback: &F) -> SearchInfo where F: Fn(Term) + Send + Sync {

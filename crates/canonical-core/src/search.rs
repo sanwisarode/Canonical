@@ -167,36 +167,16 @@ impl Meta {
             return NextNew { next: result, index }
         }
 
-        // #NEW BEG
-        // Metric: how quickly assigning this mvar increases the entropy (its difficulty),
-        // relative to how much it branches the search.
-        let metrics: Vec<f64> = infos.iter().map(|info|
-            info.difficulty()
-        ).collect();
+        let hardest = infos.iter()
+            .map(MetaInfo::difficulty)
+            .enumerate()
+            .filter(|&(idx , _)| eligible[idx])
+            .max_by(|&(_, diff1), &(_, diff2)| diff1.total_cmp(&diff2))
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
 
-        let mut fallback_index = 0;
-        let mut eligible_index: Option<usize> = None;
-        for i in 0..infos.len() {
-            if metrics[i] > metrics[fallback_index] {
-                fallback_index = i;
-            }
+        let result = infos.remove(hardest);
 
-            if eligible[i] {
-                match eligible_index {
-                    None => eligible_index = Some(i),
-                    Some(current) => {
-                        if metrics[i] > metrics[current] {
-                            eligible_index = Some(i);
-                        }
-                    }
-                }
-            }
-        }
-        // #NEW END
-
-        let index = eligible_index.unwrap_or(fallback_index);
-        let result = infos.remove(index);
-
-        return NextNew { next: result, index }
+        return NextNew { next: result, index: hardest }
     }
 }
