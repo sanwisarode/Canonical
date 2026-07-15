@@ -232,7 +232,7 @@ impl Prover {
 
                         frame.stats.add_branch(&acc);
                         let stats = frame.stats.clone();
-                        self.frames.push(frame);
+                        // self.frames.push(frame);
                         self.backtrack(0);
                         return stats;
 
