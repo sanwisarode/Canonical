@@ -21,13 +21,13 @@ struct Frame {
     component: Component,
 }
 
-struct Component {
-    unassigned: Vec<W<Meta>>,
-    next: MetaInfo,
-    fuel: f64,
-    meta_entropy: f64,
-    extra_entropy: f64,
-    parent: usize
+pub struct Component {
+    pub unassigned: Vec<W<Meta>>,
+    pub next: MetaInfo,
+    pub(crate) fuel: f64,
+    pub(crate) meta_entropy: f64,
+    pub(crate) extra_entropy: f64,
+    pub(crate) parent: usize,
 }
 
 pub struct Prover {
@@ -42,6 +42,7 @@ pub struct Prover {
 
 impl Frame {
     fn new(component: Component, truncate: usize) -> Self {
+        component.next.meta.borrow_mut().had_rigid_equation = component.next.has_rigid_equation;
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
         for (db, linked) in component.next.meta.borrow().gamma.iter_unify(
@@ -60,32 +61,14 @@ impl Frame {
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
         let mut unassigned = self.component.unassigned.clone();
         unassigned.extend(args);
-        let components = split(unassigned);
-        let sum: f64 = components.iter().map(|component| component.entropy).sum();
+        let fuel = self.component.fuel * (info.weight() / self.total_weight);
+        let extra_entropy = self.component.extra_entropy;
         self.component.next.meta.borrow_mut().assign(assn, constraints);
-        components.into_iter().map(|component|
-            Component::new(self, component, sum, index, info.weight())
-        ).collect()
+        split(unassigned, fuel, extra_entropy, index)
     }
 }
 
 impl Component {
-    fn new(frame: &Frame, component: SplitComponent, sum: f64, parent: usize, weight: f64) -> Self {
-        let mut next = Meta::next_new(&component.unassigned);
-        next.next.meta.borrow_mut().had_rigid_equation = next.next.has_rigid_equation;
-        let mut unassigned: Vec<W<Meta>> = component.unassigned.iter().map(|x| x.meta.clone()).collect(); // TODO temporary hack
-        // we use swap_remvoe for O(1) complexity since ordering does not matter anymore
-        unassigned.swap_remove(next.index);
-        Component {
-            fuel: frame.component.fuel * (weight / frame.total_weight),
-            meta_entropy: component.entropy,
-            extra_entropy: frame.component.extra_entropy + sum - component.entropy,
-            next: next.next,
-            unassigned,
-            parent
-        }   
-    }
-
     fn prune(&self) -> bool {
         return self.fuel < self.meta_entropy + self.extra_entropy;
     }

@@ -3,6 +3,7 @@ use crate::memory::*;
 use crate::stats::MetaInfo;
 use std::collections::HashMap;
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
+use crate::prover::Component;
 
 pub struct NextInfo {
     pub meta: W<Meta>,
@@ -41,7 +42,7 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 }
 
 /// Partition the unassigned metavariables under `root` into independent components.
-pub fn split(unassigned: Vec<W<Meta>>) -> Vec<SplitComponent> {
+pub fn split(unassigned: Vec<W<Meta>>, fuel: f64, extra_entropy: f64, parent: usize) -> Vec<Component> {
     let mut indices: HashMap<W<Meta>, usize> = HashMap::default();
     for (i, x) in unassigned.iter().enumerate() {
         indices.insert(x.clone(), i);
@@ -87,10 +88,45 @@ pub fn split(unassigned: Vec<W<Meta>>) -> Vec<SplitComponent> {
         }
     }
 
-    buckets.into_iter().map(|unassigned| {
+    let components: Vec<SplitComponent> = buckets.into_iter().map(|unassigned| {
         let entropy = unassigned.iter().map(|mvar|
             MetaInfo::new(mvar.meta.clone()).difficulty()
         ).product();
         SplitComponent { unassigned, entropy }
+    }).collect();
+    let sum: f64 = components.iter().map(|component| component.entropy).sum();
+
+    components.into_iter().map(|component| {
+        let (next, next_index) = (|| {
+            let mut infos = Vec::with_capacity(component.unassigned.len());
+            for (i, mvar) in component.unassigned.iter().enumerate() {
+                let info = MetaInfo::new(mvar.meta.clone());
+                let has_rigid_equation = info.has_rigid_equation;
+                let next = (info, i);
+                if has_rigid_equation { return next }
+                if mvar.eligible { infos.push(next); }
+            }
+
+            let mut best = infos.pop().expect("No eligible mvars!");
+            for info in infos.into_iter() {
+                if info.0.difficulty() > best.0.difficulty() {
+                    best = info;
+                }
+            }
+
+            return best
+        })();
+
+        let mut unassigned: Vec<W<Meta>> = component.unassigned.into_iter().map(|x| x.meta).collect();
+        // We use swap_remove for O(1) complexity since ordering does not matter anymore.
+        unassigned.swap_remove(next_index);
+        Component {
+            fuel,
+            meta_entropy: component.entropy,
+            extra_entropy: extra_entropy + sum - component.entropy,
+            next,
+            unassigned,
+            parent
+        }
     }).collect()
 }

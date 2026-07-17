@@ -3,7 +3,6 @@ use crate::heuristic::*;
 use crate::memory::{S, W, WVec};
 use crate::stats::*;
 use std::sync::atomic::AtomicBool;
-use crate::independence::NextInfo;
 
 /// Set `RUN` to false to cancel terminate the ongoing problem.
 pub static RUN: AtomicBool = AtomicBool::new(true);
@@ -109,11 +108,6 @@ impl Next {
     }
 }
 
-pub struct NextNew {
-    pub next: MetaInfo,
-    pub index: usize
-}
-
 impl Meta {
     /// Traverse the partial term, to obtain the entropy and next metavariable.
     pub fn next(mut meta: W<Meta>) -> Next {
@@ -148,24 +142,4 @@ impl Meta {
     //         }
     //     }
     // }
-
-    pub fn next_new(unassigned: &Vec<NextInfo>) -> NextNew {
-        let mut infos = Vec::with_capacity(unassigned.len());
-        for (i, mvar) in unassigned.into_iter().enumerate() {
-            let info = MetaInfo::new(mvar.meta.clone());
-            let has_rigid_equation = info.has_rigid_equation;
-            let next = NextNew { next: info, index: i };
-            if has_rigid_equation { return next }
-            if mvar.eligible { infos.push(next); }
-        }
-
-        let mut best = infos.pop().expect("No eligible mvars!");
-        for info in infos.into_iter() {
-            if info.next.difficulty() > best.next.difficulty() {
-                best = info;
-            }
-        }
-
-        return best
-    }
 }
