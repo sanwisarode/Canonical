@@ -106,10 +106,12 @@ async fn term(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Val
 
     let mut unassigned = Vec::new();
     collect_unassigned(state.current.downgrade(), &mut unassigned);
-    let components = split(unassigned);
-    let components : Vec<Vec<String>> = components.iter().map(|c| c.unassigned.iter().map(|m|
-        m.meta.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
-    ).collect()).collect();
+    let components = split(unassigned, 0.0, 0.0, 0);
+    let components : Vec<Vec<String>> = components.iter().map(|c|
+        std::iter::once(&c.next.meta).chain(c.unassigned.iter()).map(|m|
+            m.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
+        ).collect()
+    ).collect();
     let html = format!("{}\n\n{:?}", html, components);
 
 
