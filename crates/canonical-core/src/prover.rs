@@ -41,7 +41,7 @@ pub struct Prover {
 }
 
 impl Frame {
-    fn new(component: Component, truncate: usize) -> Self {
+    fn new(mut component: Component, truncate: usize) -> Self {
         component.next.meta.borrow_mut().had_rigid_equation = component.next.has_rigid_equation;
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
