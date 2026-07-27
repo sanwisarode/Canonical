@@ -10,12 +10,6 @@ pub struct NextInfo {
     pub eligible: bool    
 }
 
-/// An independent component and the information used to choose its next metavariable.
-pub struct SplitComponent {
-    pub unassigned: Vec<NextInfo>,
-    pub entropy: f64
-}
-
 /// The metavariables whose assignments may interact with `mvar`.
 fn involved(mvar: W<Meta>) -> Vec<(W<Meta>, bool)> {
     let typ = mvar.borrow().typ.as_ref().unwrap();
@@ -88,18 +82,18 @@ pub fn split(unassigned: Vec<W<Meta>>, fuel: f64, extra_entropy: f64, parent: us
         }
     }
 
-    let components: Vec<SplitComponent> = buckets.into_iter().map(|unassigned| {
+    let components: Vec<(Vec<NextInfo>, f64)> = buckets.into_iter().map(|unassigned| {
         let entropy = unassigned.iter().map(|mvar|
             MetaInfo::new(mvar.meta.clone()).difficulty()
         ).product();
-        SplitComponent { unassigned, entropy }
+        (unassigned, entropy)
     }).collect();
-    let sum: f64 = components.iter().map(|component| component.entropy).sum();
+    let sum: f64 = components.iter().map(|(_, entropy)| entropy).sum();
 
-    components.into_iter().map(|component| {
+    components.into_iter().map(|(component, entropy)| {
         let (next, next_index) = (|| {
-            let mut infos = Vec::with_capacity(component.unassigned.len());
-            for (i, mvar) in component.unassigned.iter().enumerate() {
+            let mut infos = Vec::with_capacity(component.len());
+            for (i, mvar) in component.iter().enumerate() {
                 let info = MetaInfo::new(mvar.meta.clone());
                 let has_rigid_equation = info.has_rigid_equation;
                 let next = (info, i);
@@ -117,13 +111,13 @@ pub fn split(unassigned: Vec<W<Meta>>, fuel: f64, extra_entropy: f64, parent: us
             return best
         })();
 
-        let mut unassigned: Vec<W<Meta>> = component.unassigned.into_iter().map(|x| x.meta).collect();
+        let mut unassigned: Vec<W<Meta>> = component.into_iter().map(|x| x.meta).collect();
         // We use swap_remove for O(1) complexity since ordering does not matter anymore.
         unassigned.swap_remove(next_index);
         Component {
             fuel,
-            meta_entropy: component.entropy,
-            extra_entropy: extra_entropy + sum - component.entropy,
+            meta_entropy: entropy,
+            extra_entropy: extra_entropy + sum - entropy,
             next,
             unassigned,
             parent

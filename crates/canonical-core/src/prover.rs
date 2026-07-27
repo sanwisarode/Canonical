@@ -8,7 +8,7 @@ use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use std::time::Duration;
 use rustc_hash::FxHashMap as HashMap;
-use crate::independence::{split, SplitComponent};
+use crate::independence::split;
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
