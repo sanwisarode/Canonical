@@ -181,8 +181,8 @@ impl Prover {
     fn dfs<F>(&mut self, max_size: usize, callback: &F) -> SearchInfo where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
-            if let Some(component) = self.components.pop() {
-                if self.frames.len() < max_size { 
+            if self.frames.len() < max_size { 
+                if let Some(component) = self.components.pop() {
                     let mut frame = Frame::new(component, self.components.len());
                     if self.parallelize(&frame) {
                         let mut provers = Vec::new();
@@ -222,8 +222,8 @@ impl Prover {
                     } else {
                         self.frames.push(frame); 
                     }
-                }
-            } else { callback(self.get_term()) }
+                } else { callback(self.get_term()) }
+            } 
             if let Some(result) = self.step(self.frames.len()) { return result; }
         }
         return SearchInfo::new_branch(); // TODO

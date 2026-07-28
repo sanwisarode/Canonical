@@ -12,9 +12,9 @@ def add (n : Nat') : Nat' → Nat'
 | Nat'.zero => n
 | Nat'.succ m => Nat'.succ (add n m)
 
--- set_option pp.explicit true in
--- example (a b : Nat') : add a b = add b a := by
---   canonical 30
+set_option pp.explicit true in
+example (a b : Nat') : add a b = add b a := by
+  canonical 30 +debug
 
 
 -- variable {α : Type} {n m : Nat}

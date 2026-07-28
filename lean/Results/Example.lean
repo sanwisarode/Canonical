@@ -9,12 +9,12 @@ open Function
 example : (A ∧ ¬A) → B :=
   by canonical
 
--- theorem false_of_a_eq_not_a {a : Prop} (h : a = Not a) : False :=
---   have : Not a := fun ha ↦ absurd ha (Eq.mp h ha)
---   absurd (Eq.mpr h this) this
+theorem false_of_a_eq_not_a {a : Prop} (h : a = Not a) : False :=
+  have : Not a := fun ha ↦ absurd ha (Eq.mp h ha)
+  absurd (Eq.mpr h this) this
 
--- theorem Cantor (f : X → Set X) : ¬Surjective f :=
---   by canonical 20 [false_of_a_eq_not_a, congrFun]
+theorem Cantor (f : X → Set X) : ¬Surjective f :=
+  by canonical 20 [false_of_a_eq_not_a, congrFun]
 
 
 inductive Vec (A : Type) : Nat → Type u where
