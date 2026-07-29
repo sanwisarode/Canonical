@@ -34,7 +34,7 @@ pub struct Prover {
     pub meta: S<Meta>,
     frames: Vec<Frame>,
     components: Vec<Component>,
-
+    floor: usize,
     tb_ref: W<TypeBase>,
     problem_bind: W<Bind>,
     _owned_linked: Vec<S<Linked>>
@@ -76,23 +76,23 @@ impl Component {
 
 
 impl Prover {
-    /// Creates a new Prover for the specified `Type`. 
+    /// Creates a new Prover for the specified `Type`.
     pub fn new(tb_ref: W<TypeBase>, problem_bind: W<Bind>) -> Self {
         let entry = &tb_ref.borrow().codomain.borrow().gamma.linked.as_ref().unwrap().borrow().node.entry;
-        let node = Node { 
-            entry: Entry { params_id: entry.params_id, lets_id: entry.lets_id, subst: None, 
-                context: Some(Type(tb_ref.clone(), tb_ref.borrow().codomain.borrow().gamma.clone(), problem_bind.clone()))}, 
-            bindings: tb_ref.borrow().codomain.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone() 
+        let node = Node {
+            entry: Entry { params_id: entry.params_id, lets_id: entry.lets_id, subst: None,
+                context: Some(Type(tb_ref.clone(), tb_ref.borrow().codomain.borrow().gamma.clone(), problem_bind.clone()))},
+            bindings: tb_ref.borrow().codomain.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone()
         };
         let mut owned_linked = Vec::new();
         let es = ES::new().append(node, &mut owned_linked);
         compile(Type(tb_ref.clone(), ES::new(), problem_bind.clone()));
         let ty = Type(tb_ref.clone(), es, problem_bind.clone());
         let meta = S::new(Meta::new(ty));
-        Prover { 
-            frames: Vec::new(), 
-            components: vec![Component { unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }], 
-            meta, tb_ref, problem_bind, _owned_linked: owned_linked 
+        Prover {
+            frames: Vec::new(),
+            components: vec![Component { unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }],
+            floor: 0, meta, tb_ref, problem_bind, _owned_linked: owned_linked
         }
     }
 
@@ -150,32 +150,31 @@ impl Prover {
     }
 
     fn step(&mut self, mut index: usize) -> Option<SearchInfo> {
-        'outer: loop {
-            let result = self.backtrack(index);
-            let Some(frame) = self.frames.get_mut(if index == 0 { 0 } else { index - 1 }) else { return Some(result); };
+        let mut result = self.backtrack(index);
+        while index > self.floor {
+            let frame = &mut self.frames[index - 1];
             if let Some(element) = frame.domain.pop() {
                 let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
-                frame.stats.add_branch(&assn_stats); 
+                frame.stats.add_branch(&assn_stats);
                 self.components.truncate(frame.truncate);
 
                 let mut components = frame.assign(index, element);
 
-                if components.iter().any(Component::prune) {
-                    index = frame.component.parent;
-                    continue 'outer;
+                if !components.iter().any(Component::prune) {
+                    self.components.append(&mut components);
+                    return None;
                 }
-
-                self.components.append(&mut components);
-                return None;
             }
             index = frame.component.parent;
+            result = self.backtrack(index);
         }
+        Some(result)
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
-        return false;
-        // return NUM_JOBS.load(Ordering::Relaxed) < 100 && 
-        //     frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
+        // return false;
+        return NUM_JOBS.load(Ordering::Relaxed) < 100 &&
+            frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
     }
 
     fn dfs<F>(&mut self, max_size: usize, callback: &F) -> SearchInfo where F: Fn(Term) + Send + Sync {
@@ -216,7 +215,7 @@ impl Prover {
                         frame.stats.add_branch(&acc);
                         let stats = frame.stats.clone();
                         // self.frames.push(frame);
-                        self.backtrack(0);
+                        self.backtrack(self.floor);
                         return stats;
 
                     } else {
@@ -254,7 +253,7 @@ impl Prover {
             // we assume that next_new is deterministic.
             let mut components = new_frame.assign(index+1, element);
             self.components.append(&mut components);
-            
+
             self.frames.push(new_frame);
         }
     }
@@ -263,7 +262,18 @@ impl Prover {
 impl Clone for Prover {
     // The cloned prover will not backtrack into the work of the parent prover.
     fn clone(&self) -> Self {
-        let mut prover = Prover::new(self.tb_ref.clone(), self.problem_bind.clone());
+        let meta = S::new(Meta::new(self.meta.borrow().typ.as_ref().unwrap().clone()));
+        let mut prover = Prover {
+            frames: Vec::new(),
+            components: vec![Component { unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }],
+            meta, floor: self.frames.len(),
+            tb_ref: self.tb_ref.clone(),
+            problem_bind: self.problem_bind.clone(),
+            _owned_linked: Vec::new(),
+        };
+        if let Some(root) = self.frames.first() { // TODO kind of a hack.
+            prover.components[0].fuel = root.component.fuel;
+        }
         prover.replay(self);
         prover
     }
