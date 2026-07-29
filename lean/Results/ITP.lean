@@ -8,13 +8,13 @@ inductive Nat'
 | zero : Nat'
 | succ : Nat' → Nat'
 
-def add (n : Nat') : Nat' → Nat'
-| Nat'.zero => n
-| Nat'.succ m => Nat'.succ (add n m)
+-- def add (n : Nat') : Nat' → Nat'
+-- | Nat'.zero => n
+-- | Nat'.succ m => Nat'.succ (add n m)
 
-set_option pp.explicit true in
-example (a b : Nat') : add a b = add b a := by
-  canonical 30 +debug
+-- set_option pp.explicit true in
+-- example (a b : Nat') : add a b = add b a := by
+--   canonical 30
 
 
 -- variable {α : Type} {n m : Nat}

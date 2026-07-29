@@ -53,6 +53,7 @@ impl Frame {
                 domain.push(result);
             }
         }
+        domain.reverse();
         Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), truncate }
     }
 
