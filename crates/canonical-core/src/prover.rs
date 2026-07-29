@@ -213,14 +213,8 @@ impl Prover {
                         NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
 
                         frame.stats.add_branch(&acc);
-                        let stats = frame.stats.clone();
-                        // self.frames.push(frame);
-                        self.backtrack(self.floor);
-                        return stats;
-
-                    } else {
-                        self.frames.push(frame); 
                     }
+                    self.frames.push(frame); 
                 } else { callback(self.get_term()) }
             } 
             if let Some(result) = self.step(self.frames.len()) { return result; }
