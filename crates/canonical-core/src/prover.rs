@@ -65,7 +65,17 @@ impl Frame {
         let fuel = self.component.fuel * (info.weight() / self.total_weight);
         let extra_entropy = self.component.extra_entropy;
         self.component.next.meta.borrow_mut().assign(assn, constraints);
-        split(unassigned, fuel, extra_entropy, index)
+
+        let partitions = split(unassigned);
+        let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
+        partitions.into_iter().map(|p| Component {
+            fuel,
+            meta_entropy: p.meta_entropy,
+            extra_entropy: extra_entropy + sum - p.meta_entropy,
+            next: p.next,
+            unassigned: p.unassigned,
+            parent: index,
+        }).collect()
     }
 }
 
@@ -74,7 +84,6 @@ impl Component {
         return self.fuel < self.meta_entropy + self.extra_entropy;
     }
 }
-
 
 impl Prover {
     /// Creates a new Prover for the specified `Type`.
@@ -178,6 +187,40 @@ impl Prover {
             frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
     }
 
+    // Moving parallelism branch of dfs to new function
+    fn parallelize_frame<F>(&mut self, mut frame: Frame, max_size: usize, callback: &F) -> Frame where F: Fn(Term) + Send + Sync {
+        let mut provers = Vec::new();
+        let mut domain = Vec::new();
+        domain.append(&mut frame.domain); // ownership hack
+        while let Some(element) = domain.pop() {
+            // no need to add components.
+            let _components = frame.assign(self.frames.len() + 1, element);
+            self.frames.push(frame);
+            provers.push(self.clone());
+
+            // regain ownership
+            frame = self.frames.pop().unwrap();
+            frame.component.next.meta.borrow_mut().unassign();
+        }
+
+        let options = provers.len();
+        NUM_JOBS.fetch_add(options, Ordering::Relaxed);
+
+        let acc = provers.into_par_iter().map(|mut prover| {
+            let mut result = SearchInfo::new_branch();
+            result.add_branch(&prover.dfs(max_size, callback));
+            result
+        }).reduce(SearchInfo::new_branch, |mut a, b| {
+            a.add_branch(&b);
+            a
+        });
+
+        NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
+
+        frame.stats.add_branch(&acc);
+        frame
+    }
+
     fn dfs<F>(&mut self, max_size: usize, callback: &F) -> SearchInfo where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -185,37 +228,9 @@ impl Prover {
                 if let Some(component) = self.components.pop() {
                     let mut frame = Frame::new(component, self.components.len());
                     if self.parallelize(&frame) {
-                        let mut provers = Vec::new();
-                        let mut domain = Vec::new();
-                        domain.append(&mut frame.domain); // ownership hack
-                        while let Some(element) = domain.pop() {
-                            // no need to add components.
-                            let _components = frame.assign(self.frames.len() + 1, element);
-                            self.frames.push(frame);
-                            provers.push(self.clone());
-
-                            // regain ownership
-                            frame = self.frames.pop().unwrap();
-                            frame.component.next.meta.borrow_mut().unassign();
-                        }
-
-                        let options = provers.len();
-                        NUM_JOBS.fetch_add(options, Ordering::Relaxed);
-
-                        let acc = provers.into_par_iter().map(|mut prover| {
-                            let mut result = SearchInfo::new_branch();
-                            result.add_branch(&prover.dfs(max_size, callback));
-                            result
-                        }).reduce(SearchInfo::new_branch, |mut a, b| {
-                            a.add_branch(&b);
-                            a
-                        });
-
-                        NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
-
-                        frame.stats.add_branch(&acc);
+                        frame = self.parallelize_frame(frame, max_size, callback);
                     }
-                    self.frames.push(frame); 
+                    self.frames.push(frame);
                 } else { callback(self.get_term()) }
             } 
             if let Some(result) = self.step(self.frames.len()) { return result; }
