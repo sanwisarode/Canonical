@@ -1,7 +1,6 @@
 use crate::search::Next;
 use crate::stats::*;
-use crate::search::EXPERIMENT;
-use std::cmp::Ordering::{self, Less};
+use std::cmp::Ordering;
 
 /// Smoothly transitions between `prior` and `a / b` as `b` increases to `breakpoint`.
 pub fn div(a: f64, b: f64, prior: f64, breakpoint: f64) -> f64 {

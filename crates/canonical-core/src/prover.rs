@@ -6,9 +6,7 @@ use crate::compiler::compile;
 use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
-use std::time::Duration;
-use rustc_hash::FxHashMap as HashMap;
-use crate::independence::split;
+use crate::independence::{split, Partition};
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -22,12 +20,10 @@ struct Frame {
 }
 
 pub struct Component {
-    pub unassigned: Vec<W<Meta>>,
-    pub next: MetaInfo,
-    pub(crate) fuel: f64,
-    pub(crate) meta_entropy: f64,
-    pub(crate) extra_entropy: f64,
-    pub(crate) parent: usize,
+    pub partition: Partition,
+    pub fuel: f64,
+    pub extra_entropy: f64,
+    pub parent: usize,
 }
 
 pub struct Prover {
@@ -42,12 +38,12 @@ pub struct Prover {
 
 impl Frame {
     fn new(mut component: Component, truncate: usize) -> Self {
-        component.next.meta.borrow_mut().had_rigid_equation = component.next.has_rigid_equation;
+        component.partition.next.meta.borrow_mut().had_rigid_equation = component.partition.next.has_rigid_equation;
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
-        for (db, linked) in component.next.meta.borrow().gamma.iter_unify(
-            component.next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
-            let attempt = test(db, linked, component.next.meta.clone());
+        for (db, linked) in component.partition.next.meta.borrow().gamma.iter_unify(
+            component.partition.next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
+            let attempt = test(db, linked, component.partition.next.meta.clone());
             if let Some(Some(result)) = attempt {
                 total_weight += result.2.weight();
                 domain.push(result);
@@ -60,28 +56,26 @@ impl Frame {
     fn assign(&mut self, index: usize, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<Component> {
         let (assn, constraints, info) = element;
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-        let mut unassigned = self.component.unassigned.clone();
+        let mut unassigned = self.component.partition.unassigned.clone();
         unassigned.extend(args);
         let fuel = self.component.fuel * (info.weight() / self.total_weight);
         let extra_entropy = self.component.extra_entropy;
-        self.component.next.meta.borrow_mut().assign(assn, constraints);
+        self.component.partition.next.meta.borrow_mut().assign(assn, constraints);
 
         let partitions = split(unassigned);
         let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
-        partitions.into_iter().map(|p| Component {
-            fuel,
-            meta_entropy: p.meta_entropy,
-            extra_entropy: extra_entropy + sum - p.meta_entropy,
-            next: p.next,
-            unassigned: p.unassigned,
+        partitions.into_iter().map(|partition| Component {
+            fuel, 
+            extra_entropy: extra_entropy + sum - partition.meta_entropy,
             parent: index,
+            partition
         }).collect()
     }
 }
 
 impl Component {
     fn prune(&self) -> bool {
-        return self.fuel < self.meta_entropy + self.extra_entropy;
+        return self.fuel < self.partition.meta_entropy + self.extra_entropy;
     }
 }
 
@@ -101,7 +95,9 @@ impl Prover {
         let meta = S::new(Meta::new(ty));
         Prover {
             frames: Vec::new(),
-            components: vec![Component { unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }],
+            components: vec![Component { fuel: 0.0, extra_entropy: 0.0, parent: 0, partition: Partition {
+                unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
+            } }],
             floor: 0, meta, tb_ref, problem_bind, _owned_linked: owned_linked
         }
     }
@@ -148,9 +144,9 @@ impl Prover {
         let mut result = SearchInfo::new_branch();
         while self.frames.len() > index {
             let mut frame = self.frames.pop().unwrap();
-            frame.stats.add_branch(&frame.component.next.meta.borrow_mut().unassign());
-            frame.component.next.meta.borrow_mut().stats.add_branch(&frame.stats);
-            frame.component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
+            frame.stats.add_branch(&frame.component.partition.next.meta.borrow_mut().unassign());
+            frame.component.partition.next.meta.borrow_mut().stats.add_branch(&frame.stats);
+            frame.component.partition.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
 
             self.components.truncate(frame.truncate);
             self.components.push(frame.component);
@@ -164,7 +160,7 @@ impl Prover {
         while index > self.floor {
             let frame = &mut self.frames[index - 1];
             if let Some(element) = frame.domain.pop() {
-                let assn_stats = frame.component.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
+                let assn_stats = frame.component.partition.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
                 frame.stats.add_branch(&assn_stats);
                 self.components.truncate(frame.truncate);
 
@@ -183,8 +179,8 @@ impl Prover {
 
     fn parallelize(&self, frame: &Frame) -> bool {
         // return false;
-        return NUM_JOBS.load(Ordering::Relaxed) < 100 &&
-            frame.component.fuel/1000000.0 < frame.component.meta_entropy + frame.component.extra_entropy;
+        return NUM_JOBS.load(Ordering::Relaxed) < 100 && frame.domain.len() > 2 &&
+            frame.component.fuel/1000000.0 < frame.component.partition.meta_entropy + frame.component.extra_entropy;
     }
 
     // Moving parallelism branch of dfs to new function
@@ -194,13 +190,16 @@ impl Prover {
         domain.append(&mut frame.domain); // ownership hack
         while let Some(element) = domain.pop() {
             // no need to add components.
-            let _components = frame.assign(self.frames.len() + 1, element);
+            let components = frame.assign(self.frames.len() + 1, element);
+            self.components.extend(components);
             self.frames.push(frame);
+            
             provers.push(self.clone());
 
             // regain ownership
             frame = self.frames.pop().unwrap();
-            frame.component.next.meta.borrow_mut().unassign();
+            frame.component.partition.next.meta.borrow_mut().unassign();
+            self.components.truncate(frame.truncate);
         }
 
         let options = provers.len();
@@ -243,12 +242,12 @@ unsafe impl Send for Prover {}
 unsafe impl Sync for Prover {}
 
 impl Prover {
-    fn replay(&mut self, child: &Prover) {
-        for (index, frame) in child.frames.iter().enumerate().skip(self.frames.len()) {
+    fn replay(&mut self, parent: &Prover) {
+        for (index, frame) in parent.frames.iter().enumerate().skip(self.frames.len()) {
             // we assume that we always work on the last component.
             let component = self.components.pop().unwrap();
-            let mvar = frame.component.next.meta.clone();
-            let mvar_new = component.next.meta.clone();
+            let mvar = frame.component.partition.next.meta.clone();
+            let mvar_new = component.partition.next.meta.clone();
             let mut new_frame = Frame {
                 domain: Vec::new(),
                 total_weight: frame.total_weight,
@@ -266,6 +265,11 @@ impl Prover {
 
             self.frames.push(new_frame);
         }
+
+        for (index, component) in parent.components.iter().enumerate() {
+            self.components[index].extra_entropy = component.extra_entropy;
+            self.components[index].fuel = component.fuel;
+        }
     }
 }
 
@@ -275,15 +279,14 @@ impl Clone for Prover {
         let meta = S::new(Meta::new(self.meta.borrow().typ.as_ref().unwrap().clone()));
         let mut prover = Prover {
             frames: Vec::new(),
-            components: vec![Component { unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), fuel: 0.0, meta_entropy: 0.0, extra_entropy: 0.0, parent: 0 }],
+            components: vec![Component { fuel: 0.0, extra_entropy: 0.0, parent: 0, partition: Partition {
+                unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
+            } }],
             meta, floor: self.frames.len(),
             tb_ref: self.tb_ref.clone(),
             problem_bind: self.problem_bind.clone(),
             _owned_linked: Vec::new(),
         };
-        if let Some(root) = self.frames.first() { // TODO kind of a hack.
-            prover.components[0].fuel = root.component.fuel;
-        }
         prover.replay(self);
         prover
     }

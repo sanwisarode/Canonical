@@ -1,7 +1,5 @@
 use canonical_core::core::*;
 use canonical_core::memory::S;
-use canonical_core::search::EXPERIMENT;
-use std::sync::atomic::Ordering;
 pub mod ir;
 pub mod refine;
 pub mod reduction;
@@ -11,7 +9,6 @@ use ir::*;
 use std::time::SystemTime;
 use canonical_core::stats::STEP_COUNT;
 use canonical_core::prover::Prover;
-use canonical_core::search::RUN;
 
 /// Manually construct a IRTerm body.
 #[allow(unused_macros)]
