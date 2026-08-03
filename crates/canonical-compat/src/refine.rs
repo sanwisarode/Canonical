@@ -98,35 +98,36 @@ async fn index() -> impl IntoResponse {
 
 /// Get the current term as HTML, and next metavariable.
 async fn term(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Value> {
-    let state = lock(&state);
-    let meta = state.current.downgrade();
-    let mut owned_linked = Vec::new();
-    let term = IRSpine::from_body::<false>(Term { base: meta.clone(), es: meta.borrow().gamma.clone() }.whnf::<false, ()>(&mut owned_linked, &mut ()), true);
-    let html = term.to_string();
+    // let state = lock(&state);
+    // let meta = state.current.downgrade();
+    // let mut owned_linked = Vec::new();
+    // let term = IRSpine::from_body::<false>(Term { base: meta.clone(), es: meta.borrow().gamma.clone() }.whnf::<false, ()>(&mut owned_linked, &mut ()), true);
+    // let html = term.to_string();
 
-    let mut unassigned = Vec::new();
-    collect_unassigned(state.current.downgrade(), &mut unassigned);
-    let components = split(unassigned);
-    let components : Vec<Vec<String>> = components.iter().map(|c|
-        std::iter::once(&c.next.meta).chain(c.unassigned.iter()).map(|m|
-            m.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
-        ).collect()
-    ).collect();
-    let html = format!("{}\n\n{:?}", html, components);
+    // let mut unassigned = Vec::new();
+    // collect_unassigned(state.current.downgrade(), &mut unassigned);
+    // let components = split(unassigned);
+    // let components : Vec<Vec<String>> = components.iter().map(|c|
+    //     std::iter::once(&c.next.meta).chain(c.unassigned.iter()).map(|m|
+    //         m.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
+    //     ).collect()
+    // ).collect();
+    // let html = format!("{}\n\n{:?}", html, components);
 
 
-    let next = Meta::next(meta)
-        .next
-        .map(|m| m.meta.borrow() as *const Meta as usize);
+    // let next = Meta::next(meta)
+    //     .next
+    //     .map(|m| m.meta.borrow() as *const Meta as usize);
 
-    return Json(json!({
-        "html": html,
-        "next": next,
-        "undo": !state.undo.is_empty(),
-        "redo": !state.redo.is_empty(),
-        "autofill": state.autofill,
-        "constraints": state.constraints
-    }));
+    // return Json(json!({
+    //     "html": html,
+    //     "next": next,
+    //     "undo": !state.undo.is_empty(),
+    //     "redo": !state.redo.is_empty(),
+    //     "autofill": state.autofill,
+    //     "constraints": state.constraints
+    // }));
+    return Json(json!({}));
 }
 
 /// Perform the assignment on the prover in the state. 

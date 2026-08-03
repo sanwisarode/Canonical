@@ -128,7 +128,7 @@ impl Meta {
                 position: 0,
                 blame: this.clone(),
             }.reduce(&mut new_constraints, &mut assn.changes, &mut assn._owned_linked)
-        ) { return None; }
+        ) { return None }
 
         if !self.constraints.iter().all(|c|
             c.reduce(&mut new_constraints, &mut assn.changes, &mut assn._owned_linked)
