@@ -164,10 +164,10 @@ impl Prover {
                 frame.stats.add_branch(&assn_stats);
                 self.components.truncate(frame.truncate);
 
-                let mut components = frame.assign(index, element);
+                let components = frame.assign(index, element);
 
                 if !components.iter().any(Component::prune) {
-                    self.components.append(&mut components);
+                    self.components.extend(components);
                     return None;
                 }
             }
@@ -234,7 +234,7 @@ impl Prover {
             } 
             if let Some(result) = self.step(self.frames.len()) { return result; }
         }
-        return SearchInfo::new_branch(); // TODO
+        return self.backtrack(self.floor);
     }
 }
 
@@ -260,8 +260,8 @@ impl Prover {
             let element = test(db, linked, mvar_new.clone()).unwrap().unwrap();
 
             // we assume that next_new is deterministic.
-            let mut components = new_frame.assign(index+1, element);
-            self.components.append(&mut components);
+            let components = new_frame.assign(index+1, element);
+            self.components.extend(components);
 
             self.frames.push(new_frame);
         }
