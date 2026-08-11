@@ -7,6 +7,7 @@ use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use crate::independence::{split, Partition};
+use std::rc::Rc;
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -14,42 +15,32 @@ pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
     total_weight: f64,
-    // index into prover:components of the component this frame refines.
-    component: usize,
-    // the frame that created component; None for the root.
-    parent: Option<usize>,
-    // components created by the current assignment (indices into prover::components).
-    children: Vec<usize>,
-    // how many of children have been solved so far.
-    cursor: usize,
+    stats: SearchInfo,
+    component: Component,
+    children: Vec<S<Frame>>,
+    complete: bool
 }
 
 pub struct Component {
     pub partition: Partition,
     pub fuel: f64,
     pub extra_entropy: f64,
-    // the frame that created this component; None only for the root.
-    pub parent: Option<usize>,
-    // the frame currently refining this component, if any (index into prover::frames).
-    // lets a subtree be walked when freeing it; a component is live if a frame references it.
-    frame: Option<usize>,
+    pub parent: Option<W<Frame>>,
 }
 
 pub struct Prover {
     pub meta: S<Meta>,
-    // search-tree frames; freed slots are recycled via free_frames.
-    frames: Vec<Frame>,
-    free_frames: Vec<usize>,
-    // a component is live iff a frame references its index; the free-list tracks reusable slots.
+    pub frame: S<Frame>,
+    frames: Vec<W<Frame>>,
     components: Vec<Component>,
-    free_components: Vec<usize>,
+    floor: usize,
     tb_ref: W<TypeBase>,
     problem_bind: W<Bind>,
     _owned_linked: Vec<S<Linked>>
 }
 
 impl Frame {
-    fn new(mut component: Component, truncate: usize) -> Self {
+    fn new(mut component: Component) -> Self {
         component.partition.next.meta.borrow_mut().had_rigid_equation = component.partition.next.has_rigid_equation;
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
@@ -62,26 +53,33 @@ impl Frame {
             }
         }
         domain.reverse();
-        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), truncate }
+        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), complete: false }
     }
 
-    fn assign(&mut self, index: usize, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<Component> {
+    fn assign(mut frame: Frame, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<Frame> {
         let (assn, constraints, info) = element;
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-        let mut unassigned = self.component.partition.unassigned.clone();
+        let mut unassigned = frame.component.partition.unassigned.clone();
         unassigned.extend(args);
-        let fuel = self.component.fuel * (info.weight() / self.total_weight);
-        let extra_entropy = self.component.extra_entropy;
-        self.component.partition.next.meta.borrow_mut().assign(assn, constraints);
+        let fuel = frame.component.fuel * (info.weight() / frame.total_weight);
+        let extra_entropy = frame.component.extra_entropy;
+        frame.component.partition.next.meta.borrow_mut().assign(assn, constraints);
 
         let partitions = split(unassigned);
         let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
-        partitions.into_iter().map(|partition| Component {
-            fuel, 
-            extra_entropy: extra_entropy + sum - partition.meta_entropy,
-            parent: index,
-            partition
-        }).collect()
+        if partitions.is_empty() {
+            frame.complete = true;
+            return vec![frame]
+        }
+        let rc = Rc::new(frame);
+        partitions.into_iter().map(|partition| Frame::new(
+            Component {
+                fuel, 
+                extra_entropy: extra_entropy + sum - partition.meta_entropy,
+                parent: Some(rc.clone()),
+                partition
+            }
+        )).collect()
     }
 }
 
@@ -107,7 +105,7 @@ impl Prover {
         let meta = S::new(Meta::new(ty));
         Prover {
             frames: Vec::new(),
-            components: vec![Component { fuel: 0.0, extra_entropy: 0.0, parent: 0, partition: Partition {
+            components: vec![Component { fuel: 0.0, extra_entropy: 0.0, parent: None, partition: Partition {
                 unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
             } }],
             floor: 0, meta, tb_ref, problem_bind, _owned_linked: owned_linked
@@ -152,49 +150,60 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    // backtrack changes -- doesn't compile with new changes right now
-    fn backtrack(&mut self, f: usize) -> Option<usize> {
-        // recycle slots for the subtree this frame's assignment produced,
-        // walking each child component down through its frame's own children.
-        let children = std::mem::take(&mut self.frames[f].children);
-        for ci in children {
-            let mut stack = vec![ci];
-            while let Some(c) = stack.pop() {
-                if let Some(child_frame) = self.components[c].frame.take() {
-                    stack.extend(self.frames[child_frame].children.iter().copied());
-                    self.free_frames.push(child_frame);
-                }
-                self.free_components.push(c);
-            }
-        }
+    fn backtrack(&mut self, parent: &Frame) -> SearchInfo {
+        // let mut result = SearchInfo::new_branch();
+        // while self.frames.len() > index {
+        //     let mut frame = self.frames.pop().unwrap();
+        //     frame.stats.add_branch(&frame.component.partition.next.meta.borrow_mut().unassign());
+        //     frame.component.partition.next.meta.borrow_mut().stats.add_branch(&frame.stats);
+        //     frame.component.partition.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
 
-        // The single unassignment: drops the metavariable subtree.
-        let comp = self.frames[f].component;
-        self.components[comp].partition.next.meta.borrow_mut().unassign();
+        //     self.components.truncate(frame.truncate);
+        //     self.components.push(frame.component);
+        //     result = frame.stats;
+        // }
+        // return result;
 
-        self.frames[f].parent
+        // backtrack: find all frames with frame.parent as an ancestor, unassign and deallocate them, unassign frame.parent and add to self.frames
+        
+        // Each frame has Vec<S<Frame>> children
+        // Each frame has Option<W<Frame>> for parent
+        // Prover has Vec<W<Frame>> for unassigned
+
+        // recurse on parent.children
+        // unassign on the upward pass
+        // no need to deallocate
     }
 
-    fn step(&mut self, mut index: usize) -> Option<SearchInfo> {
-        let mut result = self.backtrack(index);
-        while index > self.floor {
-            let frame = &mut self.frames[index - 1];
-            if let Some(element) = frame.domain.pop() {
-                let assn_stats = frame.component.partition.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
-                frame.stats.add_branch(&assn_stats);
-                self.components.truncate(frame.truncate);
+    fn step(&mut self, mut frame: Frame) -> Option<SearchInfo> {
+        // let mut result = self.backtrack(index);
+        // while index > self.floor {
+        //     let frame = &mut self.frames[index - 1];
+        //     if let Some(element) = frame.domain.pop() {
+        //         let assn_stats = frame.component.partition.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
+        //         frame.stats.add_branch(&assn_stats);
+        //         self.components.truncate(frame.truncate);
 
-                let components = frame.assign(index, element);
+        //         let components = frame.assign(index, element);
 
-                if !components.iter().any(Component::prune) {
-                    self.components.extend(components);
-                    return None;
-                }
-            }
-            index = frame.component.parent;
-            result = self.backtrack(index);
+        //         if !components.iter().any(Component::prune) {
+        //             self.components.extend(components);
+        //             return None;
+        //         }
+        //     }
+        //     index = frame.component.parent;
+        //     result = self.backtrack(index);
+        // }
+        // Some(result)ffffu
+        
+        // Invariant: frame is unassigned
+        if let Some(element) = frame.domain.pop() {
+            self.frames.append(&mut Frame::assign(frame, element));
+            return todo!()
+        } else {
+            
+            return todo!()
         }
-        Some(result)
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
