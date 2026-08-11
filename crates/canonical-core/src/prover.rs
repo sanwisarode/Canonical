@@ -14,23 +14,35 @@ pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
     total_weight: f64,
-    stats: SearchInfo,
-    truncate: usize,
-    component: Component,
+    // index into prover:components of the component this frame refines.
+    component: usize,
+    // the frame that created component; None for the root.
+    parent: Option<usize>,
+    // components created by the current assignment (indices into prover::components).
+    children: Vec<usize>,
+    // how many of children have been solved so far.
+    cursor: usize,
 }
 
 pub struct Component {
     pub partition: Partition,
     pub fuel: f64,
     pub extra_entropy: f64,
-    pub parent: usize,
+    // the frame that created this component; None only for the root.
+    pub parent: Option<usize>,
+    // the frame currently refining this component, if any (index into prover::frames).
+    // lets a subtree be walked when freeing it; a component is live if a frame references it.
+    frame: Option<usize>,
 }
 
 pub struct Prover {
     pub meta: S<Meta>,
+    // search-tree frames; freed slots are recycled via free_frames.
     frames: Vec<Frame>,
+    free_frames: Vec<usize>,
+    // a component is live iff a frame references its index; the free-list tracks reusable slots.
     components: Vec<Component>,
-    floor: usize,
+    free_components: Vec<usize>,
     tb_ref: W<TypeBase>,
     problem_bind: W<Bind>,
     _owned_linked: Vec<S<Linked>>
@@ -140,19 +152,27 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, index: usize) -> SearchInfo {
-        let mut result = SearchInfo::new_branch();
-        while self.frames.len() > index {
-            let mut frame = self.frames.pop().unwrap();
-            frame.stats.add_branch(&frame.component.partition.next.meta.borrow_mut().unassign());
-            frame.component.partition.next.meta.borrow_mut().stats.add_branch(&frame.stats);
-            frame.component.partition.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
-
-            self.components.truncate(frame.truncate);
-            self.components.push(frame.component);
-            result = frame.stats;
+    // backtrack changes -- doesn't compile with new changes right now
+    fn backtrack(&mut self, f: usize) -> Option<usize> {
+        // recycle slots for the subtree this frame's assignment produced,
+        // walking each child component down through its frame's own children.
+        let children = std::mem::take(&mut self.frames[f].children);
+        for ci in children {
+            let mut stack = vec![ci];
+            while let Some(c) = stack.pop() {
+                if let Some(child_frame) = self.components[c].frame.take() {
+                    stack.extend(self.frames[child_frame].children.iter().copied());
+                    self.free_frames.push(child_frame);
+                }
+                self.free_components.push(c);
+            }
         }
-        return result;
+
+        // The single unassignment: drops the metavariable subtree.
+        let comp = self.frames[f].component;
+        self.components[comp].partition.next.meta.borrow_mut().unassign();
+
+        self.frames[f].parent
     }
 
     fn step(&mut self, mut index: usize) -> Option<SearchInfo> {
