@@ -7,7 +7,6 @@ use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use crate::independence::{split, Partition};
-use std::rc::Rc;
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -17,8 +16,7 @@ struct Frame {
     total_weight: f64,
     stats: SearchInfo,
     component: Component,
-    children: Vec<S<Frame>>,
-    complete: bool
+    children: Vec<S<Frame>>
 }
 
 pub struct Component {
@@ -32,7 +30,6 @@ pub struct Prover {
     pub meta: S<Meta>,
     pub frame: S<Frame>,
     frames: Vec<W<Frame>>,
-    components: Vec<Component>,
     floor: usize,
     tb_ref: W<TypeBase>,
     problem_bind: W<Bind>,
@@ -53,33 +50,7 @@ impl Frame {
             }
         }
         domain.reverse();
-        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), complete: false }
-    }
-
-    fn assign(mut frame: Frame, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<Frame> {
-        let (assn, constraints, info) = element;
-        let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-        let mut unassigned = frame.component.partition.unassigned.clone();
-        unassigned.extend(args);
-        let fuel = frame.component.fuel * (info.weight() / frame.total_weight);
-        let extra_entropy = frame.component.extra_entropy;
-        frame.component.partition.next.meta.borrow_mut().assign(assn, constraints);
-
-        let partitions = split(unassigned);
-        let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
-        if partitions.is_empty() {
-            frame.complete = true;
-            return vec![frame]
-        }
-        let rc = Rc::new(frame);
-        partitions.into_iter().map(|partition| Frame::new(
-            Component {
-                fuel, 
-                extra_entropy: extra_entropy + sum - partition.meta_entropy,
-                parent: Some(rc.clone()),
-                partition
-            }
-        )).collect()
+        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), children: Vec::new() }
     }
 }
 
@@ -103,12 +74,39 @@ impl Prover {
         compile(Type(tb_ref.clone(), ES::new(), problem_bind.clone()));
         let ty = Type(tb_ref.clone(), es, problem_bind.clone());
         let meta = S::new(Meta::new(ty));
+
+        let frame = S::new(Frame::new(Component { fuel: 0.0, extra_entropy: 0.0, parent: None, partition: Partition {
+            unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
+        } }));
+
         Prover {
-            frames: Vec::new(),
-            components: vec![Component { fuel: 0.0, extra_entropy: 0.0, parent: None, partition: Partition {
-                unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
-            } }],
+            frames: vec![frame.downgrade()],
+            frame,
             floor: 0, meta, tb_ref, problem_bind, _owned_linked: owned_linked
+        }
+    }
+
+    fn assign(&mut self, mut frame: W<Frame>, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) {
+        let (assn, constraints, info) = element;
+        let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
+        let mut unassigned = frame.borrow().component.partition.unassigned.clone();
+        unassigned.extend(args);
+        let fuel =  frame.borrow().component.fuel * (info.weight() /  frame.borrow().total_weight);
+        let extra_entropy =  frame.borrow().component.extra_entropy;
+        frame.borrow_mut().component.partition.next.meta.borrow_mut().assign(assn, constraints);
+
+        let partitions = split(unassigned);
+        let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
+
+        for partition in partitions {
+            let child = S::new(Frame::new(Component {
+                fuel, 
+                extra_entropy: extra_entropy + sum - partition.meta_entropy,
+                parent: Some(frame.clone()),
+                partition
+            }));
+            self.frames.push(child.downgrade());
+            frame.borrow_mut().children.push(child); // invariant, frame starts with children cleared
         }
     }
 
@@ -127,7 +125,7 @@ impl Prover {
         while RUN.load(Ordering::Relaxed) {
             let max_size = ((depth as f32).ln_1p()*4.0) as usize;
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
-            self.components[0].fuel = depth;
+            self.frame.borrow_mut().component.fuel = depth;
             let _ = self.dfs(max_size, callback);
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
             
@@ -175,7 +173,7 @@ impl Prover {
         // no need to deallocate
     }
 
-    fn step(&mut self, mut frame: Frame) -> Option<SearchInfo> {
+    fn step(&mut self, mut frame: W<Frame>) -> Option<SearchInfo> {
         // let mut result = self.backtrack(index);
         // while index > self.floor {
         //     let frame = &mut self.frames[index - 1];
@@ -194,14 +192,13 @@ impl Prover {
         //     index = frame.component.parent;
         //     result = self.backtrack(index);
         // }
-        // Some(result)ffffu
+        // Some(result)
         
         // Invariant: frame is unassigned
-        if let Some(element) = frame.domain.pop() {
-            self.frames.append(&mut Frame::assign(frame, element));
+        if let Some(element) = frame.borrow_mut().domain.pop() {
+            self.assign(frame, element);
             return todo!()
         } else {
-            
             return todo!()
         }
     }
