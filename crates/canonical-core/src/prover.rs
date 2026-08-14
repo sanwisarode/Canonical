@@ -33,7 +33,9 @@ pub struct Prover {
     pub meta: S<Meta>,
     pub frame: S<Frame>,
     frames: Vec<W<Frame>>,
-    floor: usize,
+    // The highest frame this prover may backtrack to before it declares itself
+    // finished. None means unwind to the true root (root.parent == None).
+    floor: Option<W<Frame>>,
     tb_ref: W<TypeBase>,
     problem_bind: W<Bind>,
     _owned_linked: Vec<S<Linked>>
@@ -85,7 +87,7 @@ impl Prover {
         Prover {
             frames: vec![frame.downgrade()],
             frame,
-            floor: 0, meta, tb_ref, problem_bind, _owned_linked: owned_linked
+            floor: None, meta, tb_ref, problem_bind, _owned_linked: owned_linked
         }
     }
 
@@ -113,9 +115,13 @@ impl Prover {
             children.push(child);
         }
         frame.borrow_mut().children = Some(children);
+
+        if let Some(i) = self.frames.iter().position(|f| *f == frame) {
+            self.frames.swap_remove(i);
+        }
     }
 
-    /// Gets the current (partial) term of the prover. 
+    /// Gets the current (partial) term of the prover.
     pub fn get_term(&self) -> Term {
         Term { base: self.meta.downgrade(), es: self.meta.borrow().gamma.clone() }
     }
@@ -324,53 +330,92 @@ impl Prover {
 unsafe impl Send for Prover {}
 unsafe impl Sync for Prover {}
 
+
 impl Prover {
-    fn replay(&mut self, parent: &Prover) {
-        for (index, frame) in parent.frames.iter().enumerate().skip(self.frames.len()) {
-            // we assume that we always work on the last component.
-            let component = self.components.pop().unwrap();
-            let mvar = frame.component.partition.next.meta.clone();
-            let mvar_new = component.partition.next.meta.clone();
-            let mut new_frame = Frame {
-                domain: Vec::new(),
-                total_weight: frame.total_weight,
-                stats: SearchInfo::new_branch(),
-                truncate: frame.truncate,
-                component
-            };
-            let db: DeBruijnIndex = mvar.borrow().assignment.as_ref().unwrap().head.clone();
-            let linked = mvar_new.borrow().gamma.sub_es(db.0).linked.unwrap();
-            let element = test(db, linked, mvar_new.clone()).unwrap().unwrap();
+    fn replay(&mut self, mut new_frame: W<Frame>, orig_frame: W<Frame>) {
+  
+        new_frame.borrow_mut().stats = orig_frame.borrow().stats.clone();
+        new_frame.borrow_mut().component.fuel = orig_frame.borrow().component.fuel;
+        new_frame.borrow_mut().component.extra_entropy = orig_frame.borrow().component.extra_entropy;
 
-            // we assume that next_new is deterministic.
-            let components = new_frame.assign(index+1, element);
-            self.components.extend(components);
-
-            self.frames.push(new_frame);
+        // An unassigned frame (children == None) is a frontier leaf: nothing to
+        // replay. Its fresh domain was already computed by Frame::new.
+        if orig_frame.borrow().children.is_none() {
+            return;
         }
 
-        for (index, component) in parent.components.iter().enumerate() {
-            self.components[index].extra_entropy = component.extra_entropy;
-            self.components[index].fuel = component.fuel;
+        // Reconstruct the element this frame assigned, on the fresh metavariable.
+        let db: DeBruijnIndex = orig_frame.borrow().component.partition.next.meta
+            .borrow().assignment.as_ref().unwrap().head.clone();
+        let meta = new_frame.borrow().component.partition.next.meta.clone();
+        let linked = meta.borrow().gamma.sub_es(db.0).linked.unwrap();
+        let element = test(db, linked, meta.clone()).unwrap().unwrap();
+
+        // Replay the assignment: creates the fresh child frames (with fresh child
+        // metas as the assignment's args) and wires their parent pointers to new_frame
+        self.assign(new_frame.clone(), element);
+
+        // Recurse into each child, matching original --> clone by index.
+        let n = orig_frame.borrow().children.as_ref().unwrap().len();
+        for i in 0..n {
+            let new_child = new_frame.borrow().children.as_ref().unwrap()[i].downgrade();
+            let orig_child = orig_frame.borrow().children.as_ref().unwrap()[i].downgrade();
+            self.replay(new_child, orig_child);
+        }
+    }
+
+    // Rebuild the eligible list as the unassigned leaves (children == None) of the freshly-cloned tree.
+    fn collect_frontier(&mut self, frame: W<Frame>) {
+        if frame.borrow().children.is_none() {
+            self.frames.push(frame);
+            return;
+        }
+        let n = frame.borrow().children.as_ref().unwrap().len();
+        for i in 0..n {
+            let child = frame.borrow().children.as_ref().unwrap()[i].downgrade();
+            self.collect_frontier(child);
         }
     }
 }
 
 impl Clone for Prover {
-    // The cloned prover will not backtrack into the work of the parent prover.
+ 
     fn clone(&self) -> Self {
         let meta = S::new(Meta::new(self.meta.borrow().typ.as_ref().unwrap().clone()));
+
+        // Fresh, unassigned root frame mirroring the original's root component.
+        let frame = S::new(Frame::new(Component {
+            fuel: self.frame.borrow().component.fuel,
+            extra_entropy: self.frame.borrow().component.extra_entropy,
+            parent: None,
+            partition: Partition {
+                unassigned: Vec::new(),
+                next: MetaInfo::new(meta.downgrade()),
+                meta_entropy: 0.0,
+            },
+        }));
+
         let mut prover = Prover {
             frames: Vec::new(),
-            components: vec![Component { fuel: 0.0, extra_entropy: 0.0, parent: 0, partition: Partition {
-                unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
-            } }],
-            meta, floor: self.frames.len(),
+            // The clone owns its whole tree, so it may unwind to its own root
+            // before finishing. If cloning-based parallelism is reintroduced,
+            // set this to the fork frame instead so the clone only explores its
+            // assigned subtree. 
+            floor: Some(frame.downgrade()),
+            frame,
+            meta,
             tb_ref: self.tb_ref.clone(),
             problem_bind: self.problem_bind.clone(),
             _owned_linked: Vec::new(),
         };
-        prover.replay(self);
+
+        // Rebuild the tree onto fresh memory.
+        prover.replay(prover.frame.downgrade(), self.frame.downgrade());
+
+        // Rebuild the eligible frontier from the freshly-cloned tree.
+        prover.frames.clear();
+        prover.collect_frontier(prover.frame.downgrade());
+
         prover
     }
 }
