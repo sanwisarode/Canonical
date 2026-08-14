@@ -16,7 +16,10 @@ struct Frame {
     total_weight: f64,
     stats: SearchInfo,
     component: Component,
-    children: Vec<S<Frame>>
+    
+    /// The owned children frames. This is `None` if the current frame is
+    /// unassigned.
+    children: Option<Vec<S<Frame>>>
 }
 
 pub struct Component {
@@ -50,7 +53,7 @@ impl Frame {
             }
         }
         domain.reverse();
-        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), children: Vec::new() }
+        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), children: None }
     }
 }
 
@@ -98,6 +101,7 @@ impl Prover {
         let partitions = split(unassigned);
         let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
 
+        let mut children = Vec::new();
         for partition in partitions {
             let child = S::new(Frame::new(Component {
                 fuel, 
@@ -106,8 +110,9 @@ impl Prover {
                 partition
             }));
             self.frames.push(child.downgrade());
-            frame.borrow_mut().children.push(child); // invariant, frame starts with children cleared
+            children.push(child);
         }
+        frame.borrow_mut().children = Some(children);
     }
 
     /// Gets the current (partial) term of the prover. 
@@ -148,7 +153,7 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, parent: &Frame) -> SearchInfo {
+    fn backtrack(&mut self, mut parent: W<Frame>) -> SearchInfo {
         // let mut result = SearchInfo::new_branch();
         // while self.frames.len() > index {
         //     let mut frame = self.frames.pop().unwrap();
@@ -162,15 +167,52 @@ impl Prover {
         // }
         // return result;
 
-        // backtrack: find all frames with frame.parent as an ancestor, unassign and deallocate them, unassign frame.parent and add to self.frames
-        
-        // Each frame has Vec<S<Frame>> children
-        // Each frame has Option<W<Frame>> for parent
-        // Prover has Vec<W<Frame>> for unassigned
+        // Invariant:
+        // 1) All frames with frame.parent as an ancestor are unassigned and dropped
+        // 2) frame.parent is unassigned and added back to self.frames
+        // 3) parent accumulates all SearchInfo's from descendants
 
-        // recurse on parent.children
-        // unassign on the upward pass
-        // no need to deallocate
+        let frame = parent.borrow_mut();
+        let mut info = frame.stats.clone();
+
+        if let Some(children) = &frame.children {
+            for child in children {
+                info.add_branch(&self.backtrack(child.downgrade()));
+                
+                // By our invariant, child will now be unassigned and added to
+                // self.frames, so we should remove it from self.frames. We
+                // could do away with this (except for the leaf nodes) by making
+                // a backtrack_helper function that strictly does unassigning
+                // and only add back to self.frames in the main backtrack
+                // function. However, one main assumption is that self.frames is
+                // usually very small, so this isn't too pressing.
+                for (i, frame) in self.frames.iter().enumerate() {
+                    if frame.points_to(child) {
+                        self.frames.swap_remove(i);
+                        break;
+                    }
+                }
+            }
+
+            info.add_branch(&frame.component.partition.next.meta.borrow_mut().unassign());
+            frame.component.partition.next.meta.borrow_mut().stats.add_branch(&info);
+            // TODO: These are still dummy values
+            frame.component.partition.next.log(
+                &DFSResult {
+                    unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0
+                },
+                1.0, &info
+            );
+
+            frame.stats = info.clone();
+            frame.children = None;
+            self.frames.push(parent);
+        }
+
+        // In the case that parent.children is none, parent is unassigned.
+        // Then, by our invariant, parent will already be contained in
+        // self.frames, so no need to add it here.
+        return info;
     }
 
     fn step(&mut self, mut frame: W<Frame>) -> Option<SearchInfo> {
