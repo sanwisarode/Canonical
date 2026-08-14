@@ -196,10 +196,25 @@ impl Prover {
         
         // Invariant: frame is unassigned
         if let Some(element) = frame.borrow_mut().domain.pop() {
-            self.assign(frame, element);
-            return todo!()
-        } else {
-            return todo!()
+            self.assign(frame.clone(), element);
+            
+            // Undo this assignment as there exist pruned children (UNKNOWN case).
+            let pruned = frame.borrow().children.iter().any(|child| child.borrow().component.prune());
+            if pruned {
+                self.backtrack(frame);
+            }
+            return None;
+        }
+        else {
+            // Current component domain has been exhausted, so parent's current assignment has failed.
+            if let Some(parent) = frame.borrow().component.parent.clone() {
+                self.backtrack(parent);
+                return None;
+            }
+            // Root domain has been exhausted.
+            else {
+                return Some(frame.borrow().stats.clone());
+            }
         }
     }
 
