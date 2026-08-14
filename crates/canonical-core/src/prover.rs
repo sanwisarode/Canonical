@@ -247,7 +247,7 @@ impl Prover {
             self.assign(frame.clone(), element);
             
             // Undo this assignment as there exist pruned children (UNKNOWN case).
-            let pruned = frame.borrow().children.iter().any(|child| child.borrow().component.prune());
+            let pruned = frame.borrow().children.iter().flatten().any(|child| child.borrow().component.prune());
             if pruned {
                 self.backtrack(frame);
             }
