@@ -231,10 +231,12 @@ impl Prover {
         // Invariant: frame is unassigned
         if let Some(element) = frame.borrow_mut().domain.pop() {
             self.assign(frame.clone(), element);
-            
-            // Undo this assignment as there exist pruned children (UNKNOWN case).
-            let pruned = frame.borrow_mut().children.as_mut().unwrap().iter().any(|child| child.borrow().component.prune());
+
+            // Undo this assignment if any child was pruned by fuel (UNKNOWN case).
+            let pruned = frame.borrow().children.as_ref().unwrap().iter().any(|child| child.borrow().component.prune());
             if pruned {
+                // Record UNKNOWN: this branch was abandoned for fuel, not exhausted. 
+                frame.borrow_mut().component.partition.next.meta.borrow_mut().stats.unknown = true;
                 self.backtrack(frame);
             }
             return None;

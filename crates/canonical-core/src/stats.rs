@@ -86,28 +86,34 @@ impl MetaInfo {
 #[derive(Clone)]
 pub struct SearchInfo {
     pub steps: f64,
-    pub completed: bool
+    pub completed: bool,
+    // Whether any branch in this subtree was cut off by fuel (pruned) rather than fully explored. 
+    // False means the subtree is fully known: every branch was either SAT or UNSAT. 
+    // True means UNKNOWN : we can't conclude the subtree has no solution.
+    pub unknown: bool
 }
 
 impl SearchInfo {
     /// The `SearchInfo` of a new metavariable.
     pub fn new_branch() -> Self {
-        SearchInfo { steps: 0.0, completed: false }
+        SearchInfo { steps: 0.0, completed: false, unknown: false }
     }
 
     pub fn new_arg() -> Self {
-        SearchInfo { steps: 1.0, completed: true }
+        SearchInfo { steps: 1.0, completed: true, unknown: false }
     }
-    
+
     /// Add `info` into `self`.
     pub(crate) fn add_branch(&mut self, info: &SearchInfo) {
         self.steps += info.steps;
         self.completed = self.completed || info.completed;
+        self.unknown = self.unknown || info.unknown;
     }
 
     pub fn add_arg(&mut self, info: &SearchInfo) {
         self.steps += info.steps;
-        self.completed = self.completed && info.completed
+        self.completed = self.completed && info.completed;
+        self.unknown = self.unknown || info.unknown;
     }
 }
 
