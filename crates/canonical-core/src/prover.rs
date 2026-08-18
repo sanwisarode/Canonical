@@ -32,10 +32,8 @@ pub struct Component {
 pub struct Prover {
     pub meta: S<Meta>,
     pub frame: S<Frame>,
+    size: usize,
     frames: Vec<W<Frame>>,
-    // The highest frame this prover may backtrack to before it declares itself
-    // finished. None means unwind to the true root (root.parent == None).
-    floor: Option<W<Frame>>,
     tb_ref: W<TypeBase>,
     problem_bind: W<Bind>,
     _owned_linked: Vec<S<Linked>>
@@ -86,12 +84,12 @@ impl Prover {
 
         Prover {
             frames: vec![frame.downgrade()],
-            frame,
-            floor: None, meta, tb_ref, problem_bind, _owned_linked: owned_linked
+            frame, size: 0,
+            meta, tb_ref, problem_bind, _owned_linked: owned_linked
         }
     }
 
-    fn assign(&mut self, mut frame: W<Frame>, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) {
+    fn assign(&mut self, mut frame: W<Frame>, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> bool {
         let (assn, constraints, info) = element;
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
         let mut unassigned = frame.borrow().component.partition.unassigned.clone();
@@ -115,10 +113,7 @@ impl Prover {
             children.push(child);
         }
         frame.borrow_mut().children = Some(children);
-
-        if let Some(i) = self.frames.iter().position(|f| *f == frame) {
-            self.frames.swap_remove(i);
-        }
+        return true;
     }
 
     /// Gets the current (partial) term of the prover.
@@ -137,7 +132,7 @@ impl Prover {
             let max_size = ((depth as f32).ln_1p()*4.0) as usize;
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             self.frame.borrow_mut().component.fuel = depth;
-            let _ = self.dfs(max_size, callback);
+            self.dfs(max_size, callback);
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
             
             // previous_steps = result.steps;
@@ -160,19 +155,6 @@ impl Prover {
     }
 
     fn backtrack(&mut self, mut parent: W<Frame>) {
-        // let mut result = SearchInfo::new_branch();
-        // while self.frames.len() > index {
-        //     let mut frame = self.frames.pop().unwrap();
-        //     frame.stats.add_branch(&frame.component.partition.next.meta.borrow_mut().unassign());
-        //     frame.component.partition.next.meta.borrow_mut().stats.add_branch(&frame.stats);
-        //     frame.component.partition.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0, &frame.stats); // TODO dummy values
-
-        //     self.components.truncate(frame.truncate);
-        //     self.components.push(frame.component);
-        //     result = frame.stats;
-        // }
-        // return result;
-
         // Invariant:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
@@ -189,60 +171,21 @@ impl Prover {
                 // and only add back to self.frames in the main backtrack
                 // function. However, one main assumption is that self.frames is
                 // usually very small, so this isn't too pressing.
-                for (i, frame) in self.frames.iter().enumerate() {
-                    if frame.points_to(child) {
-                        self.frames.swap_remove(i);
-                        break;
-                    }
+                if let Some(i) = self.frames.iter().position(|f| f.points_to(child)) {
+                    self.frames.swap_remove(i);
                 }
             }
 
             frame.component.partition.next.meta.borrow_mut().unassign();
+            // TODO log assignment stats, AssignmentStats in Assignment?
             frame.children = None;
             self.frames.push(parent);
+            self.size -= 1;
         }
 
         // In the case that parent.children is none, parent is unassigned.
         // Then, by our invariant, parent will already be contained in
         // self.frames, so no need to add it here.
-    }
-
-    fn step(&mut self, mut frame: W<Frame>){
-        // let mut result = self.backtrack(index);
-        // while index > self.floor {
-        //     let frame = &mut self.frames[index - 1];
-        //     if let Some(element) = frame.domain.pop() {
-        //         let assn_stats = frame.component.partition.next.meta.borrow_mut().unassign(); // TODO two unassignment points, bad. Also one extra unassignment.
-        //         frame.stats.add_branch(&assn_stats);
-        //         self.components.truncate(frame.truncate);
-
-        //         let components = frame.assign(index, element);
-
-        //         if !components.iter().any(Component::prune) {
-        //             self.components.extend(components);
-        //             return None;
-        //         }
-        //     }
-        //     index = frame.component.parent;
-        //     result = self.backtrack(index);
-        // }
-        // Some(result)
-        
-        // Invariant: frame is unassigned
-        if let Some(element) = frame.borrow_mut().domain.pop() {
-            self.assign(frame.clone(), element);
-
-            // Undo this assignment if any child was pruned by fuel (UNKNOWN case).
-            let pruned = frame.borrow().children.as_ref().unwrap().iter().any(|child| child.borrow().component.prune());
-            if pruned {
-                // Record UNKNOWN: this branch was abandoned for fuel, not exhausted. 
-                frame.borrow_mut().component.partition.next.meta.borrow_mut().stats.unknown = true;
-                self.backtrack(frame);
-            }
-            return;
-        }
-        else if let Some(parent) = frame.borrow().component.parent.clone() {
-            self.backtrack(parent);
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
@@ -252,57 +195,60 @@ impl Prover {
     }
 
     // Moving parallelism branch of dfs to new function
-    fn parallelize_frame<F>(&mut self, mut frame: Frame, max_size: usize, callback: &F) -> Frame where F: Fn(Term) + Send + Sync {
-        let mut provers = Vec::new();
-        let mut domain = Vec::new();
-        domain.append(&mut frame.domain); // ownership hack
-        while let Some(element) = domain.pop() {
-            // no need to add components.
-            let components = frame.assign(self.frames.len() + 1, element);
-            self.components.extend(components);
-            self.frames.push(frame);
+    // fn parallelize_frame<F>(&mut self, mut frame: Frame, max_size: usize, callback: &F) -> Frame where F: Fn(Term) + Send + Sync {
+    //     let mut provers = Vec::new();
+    //     let mut domain = Vec::new();
+    //     domain.append(&mut frame.domain); // ownership hack
+    //     while let Some(element) = domain.pop() {
+    //         // no need to add components.
+    //         let components = frame.assign(self.frames.len() + 1, element);
+    //         self.components.extend(components);
+    //         self.frames.push(frame);
             
-            provers.push(self.clone());
+    //         provers.push(self.clone());
 
-            // regain ownership
-            frame = self.frames.pop().unwrap();
-            frame.component.partition.next.meta.borrow_mut().unassign();
-            self.components.truncate(frame.truncate);
-        }
+    //         // regain ownership
+    //         frame = self.frames.pop().unwrap();
+    //         frame.component.partition.next.meta.borrow_mut().unassign();
+    //         self.components.truncate(frame.truncate);
+    //     }
 
-        let options = provers.len();
-        NUM_JOBS.fetch_add(options, Ordering::Relaxed);
+    //     let options = provers.len();
+    //     NUM_JOBS.fetch_add(options, Ordering::Relaxed);
 
-        let acc = provers.into_par_iter().map(|mut prover| {
-            let mut result = SearchInfo::new_branch();
-            result.add_branch(&prover.dfs(max_size, callback));
-            result
-        }).reduce(SearchInfo::new_branch, |mut a, b| {
-            a.add_branch(&b);
-            a
-        });
+    //     let acc = provers.into_par_iter().map(|mut prover| {
+    //         let mut result = SearchInfo::new_branch();
+    //         result.add_branch(&prover.dfs(max_size, callback));
+    //         result
+    //     }).reduce(SearchInfo::new_branch, |mut a, b| {
+    //         a.add_branch(&b);
+    //         a
+    //     });
 
-        NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
+    //     NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
 
-        frame.stats.add_branch(&acc);
-        frame
-    }
+    //     frame.stats.add_branch(&acc);
+    //     frame
+    // }
 
-    fn dfs<F>(&mut self, max_size: usize, callback: &F) -> SearchInfo where F: Fn(Term) + Send + Sync {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
-            if self.frames.len() < max_size { 
-                if let Some(component) = self.components.pop() {
-                    let mut frame = Frame::new(component, self.components.len());
-                    if self.parallelize(&frame) {
-                        frame = self.parallelize_frame(frame, max_size, callback);
-                    }
-                    self.frames.push(frame);
+            if self.size < max_size { 
+                // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
+                // TODO backtrack on fuel exhaustion.
+                // Heuristic: choose the metavariable with rigid equation, or hardest, but take into account remaining fuel.
+                if let Some(mut frame) = self.frames.pop() {
+                    self.size += 1;
+                    if let Some(element) = frame.borrow_mut().domain.pop() {
+                        self.assign(frame.clone(), element);
+                    } else if let Some(parent) = frame.borrow().component.parent.clone() {
+                        self.backtrack(parent);
+                    } else { return }
                 } else { callback(self.get_term()) }
-            } 
-            if let Some(result) = self.step(self.frames.len()) { return result; }
+            }
         }
-        return self.backtrack(self.floor);
+        self.backtrack(self.frame.downgrade());
     }
 }
 
@@ -320,7 +266,8 @@ impl Prover {
         // An unassigned frame (children == None) is a frontier leaf: nothing to
         // replay. Its fresh domain was already computed by Frame::new.
         if orig_frame.borrow().children.is_none() {
-            return;
+            self.frames.push(new_frame);
+            return
         }
 
         // Reconstruct the element this frame assigned, on the fresh metavariable.
@@ -333,6 +280,7 @@ impl Prover {
         // Replay the assignment: creates the fresh child frames (with fresh child
         // metas as the assignment's args) and wires their parent pointers to new_frame
         self.assign(new_frame.clone(), element);
+        self.size += 1;
 
         // Recurse into each child, matching original --> clone by index.
         let n = orig_frame.borrow().children.as_ref().unwrap().len();
@@ -340,19 +288,6 @@ impl Prover {
             let new_child = new_frame.borrow().children.as_ref().unwrap()[i].downgrade();
             let orig_child = orig_frame.borrow().children.as_ref().unwrap()[i].downgrade();
             self.replay(new_child, orig_child);
-        }
-    }
-
-    // Rebuild the eligible list as the unassigned leaves (children == None) of the freshly-cloned tree.
-    fn collect_frontier(&mut self, frame: W<Frame>) {
-        if frame.borrow().children.is_none() {
-            self.frames.push(frame);
-            return;
-        }
-        let n = frame.borrow().children.as_ref().unwrap().len();
-        for i in 0..n {
-            let child = frame.borrow().children.as_ref().unwrap()[i].downgrade();
-            self.collect_frontier(child);
         }
     }
 }
@@ -374,13 +309,11 @@ impl Clone for Prover {
             },
         }));
 
+        // TODO: Set the parents of the children frames to None so the parallel
+        // runs can't backtrack behind this (replaces the floor behavior).
         let mut prover = Prover {
             frames: Vec::new(),
-            // The clone owns its whole tree, so it may unwind to its own root
-            // before finishing. If cloning-based parallelism is reintroduced,
-            // set this to the fork frame instead so the clone only explores its
-            // assigned subtree. 
-            floor: Some(frame.downgrade()),
+            size: 0,
             frame,
             meta,
             tb_ref: self.tb_ref.clone(),
@@ -390,10 +323,6 @@ impl Clone for Prover {
 
         // Rebuild the tree onto fresh memory.
         prover.replay(prover.frame.downgrade(), self.frame.downgrade());
-
-        // Rebuild the eligible frontier from the freshly-cloned tree.
-        prover.frames.clear();
-        prover.collect_frontier(prover.frame.downgrade());
 
         prover
     }
