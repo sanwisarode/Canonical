@@ -207,7 +207,7 @@ impl Prover {
         // self.frames, so no need to add it here.
     }
 
-    fn step(&mut self, mut frame: W<Frame>) -> Option<SearchInfo> {
+    fn step(&mut self, mut frame: W<Frame>){
         // let mut result = self.backtrack(index);
         // while index > self.floor {
         //     let frame = &mut self.frames[index - 1];
@@ -239,19 +239,10 @@ impl Prover {
                 frame.borrow_mut().component.partition.next.meta.borrow_mut().stats.unknown = true;
                 self.backtrack(frame);
             }
-            return None;
+            return;
         }
-        else {
-            // Current component domain has been exhausted, so parent's current assignment has failed.
-            if let Some(parent) = frame.borrow().component.parent.clone() {
-                self.backtrack(parent);
-                return None;
-            }
-            // Root domain has been exhausted.
-            else {
-                return Some(frame.borrow().stats.clone());
-            }
-        }
+        else if let Some(parent) = frame.borrow().component.parent.clone() {
+            self.backtrack(parent);
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
