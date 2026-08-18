@@ -159,7 +159,7 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, mut parent: W<Frame>) -> SearchInfo {
+    fn backtrack(&mut self, mut parent: W<Frame>) {
         // let mut result = SearchInfo::new_branch();
         // while self.frames.len() > index {
         //     let mut frame = self.frames.pop().unwrap();
@@ -177,13 +177,10 @@ impl Prover {
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
         // 3) parent accumulates all SearchInfo's from descendants
-
         let frame = parent.borrow_mut();
-        let mut info = frame.stats.clone();
-
         if let Some(children) = &frame.children {
             for child in children {
-                info.add_branch(&self.backtrack(child.downgrade()));
+                self.backtrack(child.downgrade());
                 
                 // By our invariant, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -200,17 +197,7 @@ impl Prover {
                 }
             }
 
-            info.add_branch(&frame.component.partition.next.meta.borrow_mut().unassign());
-            frame.component.partition.next.meta.borrow_mut().stats.add_branch(&info);
-            // TODO: These are still dummy values
-            frame.component.partition.next.log(
-                &DFSResult {
-                    unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0
-                },
-                1.0, &info
-            );
-
-            frame.stats = info.clone();
+            frame.component.partition.next.meta.borrow_mut().unassign();
             frame.children = None;
             self.frames.push(parent);
         }
@@ -218,7 +205,6 @@ impl Prover {
         // In the case that parent.children is none, parent is unassigned.
         // Then, by our invariant, parent will already be contained in
         // self.frames, so no need to add it here.
-        return info;
     }
 
     fn step(&mut self, mut frame: W<Frame>) -> Option<SearchInfo> {
@@ -247,7 +233,7 @@ impl Prover {
             self.assign(frame.clone(), element);
             
             // Undo this assignment as there exist pruned children (UNKNOWN case).
-            let pruned = frame.borrow().children.iter().flatten().any(|child| child.borrow().component.prune());
+            let pruned = frame.borrow_mut().children.as_mut().unwrap().iter().any(|child| child.borrow().component.prune());
             if pruned {
                 self.backtrack(frame);
             }

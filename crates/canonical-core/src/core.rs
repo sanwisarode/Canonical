@@ -158,6 +158,7 @@ impl Meta {
                 result.add_arg(&arg.borrow().stats);
             }
         }
+        self.stats.add_branch(&result);
         result
     }
 
