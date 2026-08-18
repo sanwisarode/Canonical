@@ -10,7 +10,7 @@ pub struct NextInfo {
 }
 
 /// An independent component produced by split
-pub struct Partition {
+pub struct Component {
     pub next: MetaInfo,
     pub unassigned: Vec<W<Meta>>,
     pub meta_entropy: f64,
@@ -123,7 +123,7 @@ fn select_next(component: &[NextInfo]) -> (MetaInfo, usize) {
 }
 
 // Partition the unassigned metavariables into independent components and choosing next mvar
-pub fn split(unassigned: Vec<W<Meta>>) -> Vec<Partition> {
+pub fn split(unassigned: Vec<W<Meta>>) -> Vec<Component> {
     let indices = index_map(&unassigned);
     let involved_inverse = involved_inverse(&unassigned);
     let buckets = partition(&unassigned, &indices, &involved_inverse);
@@ -135,6 +135,6 @@ pub fn split(unassigned: Vec<W<Meta>>) -> Vec<Partition> {
         let mut unassigned: Vec<W<Meta>> = component.into_iter().map(|x| x.meta).collect();
         // We use swap_remove for O(1) complexity since ordering does not matter anymore.
         unassigned.swap_remove(next_index);
-        Partition { next, unassigned, meta_entropy }
+        Component { next, unassigned, meta_entropy }
     }).collect()
 }

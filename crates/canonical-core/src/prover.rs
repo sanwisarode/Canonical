@@ -6,7 +6,7 @@ use crate::compiler::compile;
 use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
-use crate::independence::{split, Partition};
+use crate::independence::{split, Component};
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -16,17 +16,13 @@ struct Frame {
     total_weight: f64,
     stats: SearchInfo,
     component: Component,
+    fuel: f64,
+    extra_entropy: f64,
+    parent: Option<W<Frame>>,
     
     /// The owned children frames. This is `None` if the current frame is
     /// unassigned.
     children: Option<Vec<S<Frame>>>
-}
-
-pub struct Component {
-    pub partition: Partition,
-    pub fuel: f64,
-    pub extra_entropy: f64,
-    pub parent: Option<W<Frame>>,
 }
 
 pub struct Prover {
@@ -40,26 +36,24 @@ pub struct Prover {
 }
 
 impl Frame {
-    fn new(mut component: Component) -> Self {
-        component.partition.next.meta.borrow_mut().had_rigid_equation = component.partition.next.has_rigid_equation;
+    fn new(mut component: Component, fuel: f64, extra_entropy: f64, parent: Option<W<Frame>>) -> Self {
+        component.next.meta.borrow_mut().had_rigid_equation = component.next.has_rigid_equation;
         let mut domain = Vec::new();
         let mut total_weight = 0.0;
-        for (db, linked) in component.partition.next.meta.borrow().gamma.iter_unify(
-            component.partition.next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
-            let attempt = test(db, linked, component.partition.next.meta.clone());
+        for (db, linked) in component.next.meta.borrow().gamma.iter_unify(
+            component.next.meta.borrow().typ.as_ref().unwrap().0.clone()) {
+            let attempt = test(db, linked, component.next.meta.clone());
             if let Some(Some(result)) = attempt {
                 total_weight += result.2.weight();
                 domain.push(result);
             }
         }
         domain.reverse();
-        Frame { total_weight, component, domain, stats: SearchInfo::new_branch(), children: None }
+        Frame { total_weight, component, fuel, extra_entropy, parent, domain, stats: SearchInfo::new_branch(), children: None }
     }
-}
 
-impl Component {
     fn prune(&self) -> bool {
-        return self.fuel < self.partition.meta_entropy + self.extra_entropy;
+        return self.fuel < self.component.meta_entropy + self.extra_entropy;
     }
 }
 
@@ -78,9 +72,9 @@ impl Prover {
         let ty = Type(tb_ref.clone(), es, problem_bind.clone());
         let meta = S::new(Meta::new(ty));
 
-        let frame = S::new(Frame::new(Component { fuel: 0.0, extra_entropy: 0.0, parent: None, partition: Partition {
+        let frame = S::new(Frame::new(Component {
             unassigned: Vec::new(), next: MetaInfo::new(meta.downgrade()), meta_entropy: 0.0,
-        } }));
+        }, 0.0, 0.0, None));
 
         Prover {
             frames: vec![frame.downgrade()],
@@ -92,23 +86,29 @@ impl Prover {
     fn assign(&mut self, mut frame: W<Frame>, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> bool {
         let (assn, constraints, info) = element;
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
-        let mut unassigned = frame.borrow().component.partition.unassigned.clone();
+        let mut unassigned = frame.borrow().component.unassigned.clone();
         unassigned.extend(args);
-        let fuel =  frame.borrow().component.fuel * (info.weight() /  frame.borrow().total_weight);
-        let extra_entropy =  frame.borrow().component.extra_entropy;
-        frame.borrow_mut().component.partition.next.meta.borrow_mut().assign(assn, constraints);
+        let fuel =  frame.borrow().fuel * (info.weight() / frame.borrow().total_weight);
+        let extra_entropy =  frame.borrow().extra_entropy;
+        frame.borrow_mut().component.next.meta.borrow_mut().assign(assn, constraints);
 
-        let partitions = split(unassigned);
-        let sum: f64 = partitions.iter().map(|p| p.meta_entropy).sum();
+        let components = split(unassigned);
+        let sum: f64 = components.iter().map(|p| p.meta_entropy).sum();
 
         let mut children = Vec::new();
-        for partition in partitions {
-            let child = S::new(Frame::new(Component {
+        for component in components {
+            let entropy = extra_entropy + sum - component.meta_entropy;
+            let child_frame = Frame::new(component,
                 fuel, 
-                extra_entropy: extra_entropy + sum - partition.meta_entropy,
-                parent: Some(frame.clone()),
-                partition
-            }));
+                entropy,
+                Some(frame.clone()),
+            );
+            if child_frame.prune() { 
+                frame.borrow_mut().children = Some(children); 
+                return false; 
+            }
+            
+            let child = S::new(child_frame);
             self.frames.push(child.downgrade());
             children.push(child);
         }
@@ -131,7 +131,7 @@ impl Prover {
         while RUN.load(Ordering::Relaxed) {
             let max_size = ((depth as f32).ln_1p()*4.0) as usize;
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
-            self.frame.borrow_mut().component.fuel = depth;
+            self.frame.borrow_mut().fuel = depth;
             self.dfs(max_size, callback);
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
             
@@ -176,7 +176,7 @@ impl Prover {
                 }
             }
 
-            frame.component.partition.next.meta.borrow_mut().unassign();
+            frame.component.next.meta.borrow_mut().unassign();
             // TODO log assignment stats, AssignmentStats in Assignment?
             frame.children = None;
             self.frames.push(parent);
@@ -191,7 +191,7 @@ impl Prover {
     fn parallelize(&self, frame: &Frame) -> bool {
         // return false;
         return NUM_JOBS.load(Ordering::Relaxed) < 100 && frame.domain.len() > 2 &&
-            frame.component.fuel/1000000.0 < frame.component.partition.meta_entropy + frame.component.extra_entropy;
+            frame.fuel/1000000.0 < frame.component.meta_entropy + frame.extra_entropy;
     }
 
     // Moving parallelism branch of dfs to new function
@@ -241,8 +241,12 @@ impl Prover {
                 if let Some(mut frame) = self.frames.pop() {
                     self.size += 1;
                     if let Some(element) = frame.borrow_mut().domain.pop() {
-                        self.assign(frame.clone(), element);
-                    } else if let Some(parent) = frame.borrow().component.parent.clone() {
+                        if self.assign(frame.clone(), element) {
+                            continue;
+                        }
+                    }
+                    
+                    if let Some(parent) = frame.borrow().parent.clone() {
                         self.backtrack(parent);
                     } else { return }
                 } else { callback(self.get_term()) }
@@ -260,8 +264,8 @@ impl Prover {
     fn replay(&mut self, mut new_frame: W<Frame>, orig_frame: W<Frame>) {
   
         new_frame.borrow_mut().stats = orig_frame.borrow().stats.clone();
-        new_frame.borrow_mut().component.fuel = orig_frame.borrow().component.fuel;
-        new_frame.borrow_mut().component.extra_entropy = orig_frame.borrow().component.extra_entropy;
+        new_frame.borrow_mut().fuel = orig_frame.borrow().fuel;
+        new_frame.borrow_mut().extra_entropy = orig_frame.borrow().extra_entropy;
 
         // An unassigned frame (children == None) is a frontier leaf: nothing to
         // replay. Its fresh domain was already computed by Frame::new.
@@ -271,9 +275,9 @@ impl Prover {
         }
 
         // Reconstruct the element this frame assigned, on the fresh metavariable.
-        let db: DeBruijnIndex = orig_frame.borrow().component.partition.next.meta
+        let db: DeBruijnIndex = orig_frame.borrow().component.next.meta
             .borrow().assignment.as_ref().unwrap().head.clone();
-        let meta = new_frame.borrow().component.partition.next.meta.clone();
+        let meta = new_frame.borrow().component.next.meta.clone();
         let linked = meta.borrow().gamma.sub_es(db.0).linked.unwrap();
         let element = test(db, linked, meta.clone()).unwrap().unwrap();
 
@@ -298,16 +302,14 @@ impl Clone for Prover {
         let meta = S::new(Meta::new(self.meta.borrow().typ.as_ref().unwrap().clone()));
 
         // Fresh, unassigned root frame mirroring the original's root component.
-        let frame = S::new(Frame::new(Component {
-            fuel: self.frame.borrow().component.fuel,
-            extra_entropy: self.frame.borrow().component.extra_entropy,
-            parent: None,
-            partition: Partition {
+        let frame = S::new(Frame::new(
+            Component {
                 unassigned: Vec::new(),
                 next: MetaInfo::new(meta.downgrade()),
                 meta_entropy: 0.0,
-            },
-        }));
+            }, 
+            self.frame.borrow().fuel, self.frame.borrow().extra_entropy, None
+        ));
 
         // TODO: Set the parents of the children frames to None so the parallel
         // runs can't backtrack behind this (replaces the floor behavior).
