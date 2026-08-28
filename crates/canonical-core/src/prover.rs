@@ -233,34 +233,28 @@ impl Prover {
     // }
 
     fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
-        while RUN.load(Ordering::Relaxed) {
+        while RUN.load(Ordering::Relaxed) && self.size < max_size {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
-            if self.size < max_size { 
-                // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-                // Heuristic: choose the metavariable with rigid equation, or hardest, but take into account remaining fuel.
-                if let Some(mut frame) = self.frames.pop() {
-                    self.size += 1;
-                    if let Some(element) = frame.borrow_mut().domain.pop() {
-                        let children = self.assign(frame.clone(), element);
-                        if children.iter().all(|x| !x.borrow().prune()) {
-                            self.frames.extend(children.iter().map(|x| x.downgrade()));
-                            frame.borrow_mut().children = Some(children);
-                            continue;
-                        }
-                    }
-                   
-                    if let Some(parent) = frame.borrow().parent.clone() {
-                        frame.borrow_mut().component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0); 
-                        self.backtrack(parent);
-                    } else {
-                        self.frames.push(frame);
-                        return 
-                    }
-                } else { callback(self.get_term()) }
-            } else { 
-                self.frames.clear();
-                self.frames.push(self.frame.downgrade());
-                self.size = 0;
+            // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
+            // Heuristic: choose the metavariable with rigid equation, or hardest, but take into account remaining fuel.
+            let Some(mut frame) = self.frames.pop() else { callback(self.get_term()); continue };
+
+            if let Some(element) = frame.borrow_mut().domain.pop() {
+                let children = self.assign(frame.clone(), element);
+                self.size += 1;
+                if children.iter().all(|x| !x.borrow().prune()) {
+                    self.frames.extend(children.iter().map(|x| x.downgrade()));
+                    frame.borrow_mut().children = Some(children);
+                    continue;
+                }
+                frame.borrow_mut().children = Some(children);
+            }
+
+            if let Some(parent) = frame.borrow().parent.clone() {
+                frame.borrow_mut().component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0); 
+                self.backtrack(parent);
+            } else {
+                self.frames.push(frame);
                 return 
             }
         }

@@ -9,12 +9,12 @@ open Function
 example : (A ∧ ¬A) → B :=
   by canonical
 
-theorem false_of_a_eq_not_a {a : Prop} (h : a = Not a) : False :=
-  have : Not a := fun ha ↦ absurd ha (Eq.mp h ha)
-  absurd (Eq.mpr h this) this
+-- theorem false_of_a_eq_not_a {a : Prop} (h : a = Not a) : False :=
+--   have : Not a := fun ha ↦ absurd ha (Eq.mp h ha)
+--   absurd (Eq.mpr h this) this
 
-theorem Cantor (f : X → Set X) : ¬Surjective f :=
-  by canonical 20 [false_of_a_eq_not_a, congrFun]
+-- theorem Cantor (f : X → Set X) : ¬Surjective f :=
+--   by canonical 20 [false_of_a_eq_not_a, congrFun]
 
 
 -- inductive Vec (A : Type) : Nat → Type u where
@@ -26,7 +26,7 @@ theorem Cantor (f : X → Set X) : ¬Surjective f :=
 
 
 theorem Eq.trans' {a b c : α} (h₁ : Eq a b) (h₂ : Eq b c) : Eq a c :=
-  by canonical +debug
+  by canonical
 
 
 -- theorem List.recGen (motive : List α → List α → Prop) : (∀ (y : List α), motive [] y) →
@@ -40,9 +40,9 @@ theorem Eq.trans' {a b c : α} (h₁ : Eq a b) (h₂ : Eq b c) : Eq a c :=
 
 -- set_option trace.Meta.isDefEq true
 -- set_option pp.all true
--- theorem sSup_inter_le' {α : Type} [CompleteLattice α] {s t : Set α}
---   : sSup (s ∩ t) ≤ sSup s ⊓ sSup t :=
---   by canonical [sSup_le, le_sSup, le_inf, And]
+theorem sSup_inter_le' {α : Type} [CompleteLattice α] {s t : Set α}
+  : sSup (s ∩ t) ≤ sSup s ⊓ sSup t :=
+  by canonical [sSup_le, le_sSup, le_inf, And]
 
 
 -- class Group' (α : Type u) extends Semigroup α, Inv α where
