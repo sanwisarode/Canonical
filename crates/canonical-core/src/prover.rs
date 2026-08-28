@@ -83,7 +83,7 @@ impl Prover {
         }
     }
 
-    fn assign(&mut self, mut frame: W<Frame>, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> bool {
+    fn assign(&mut self, mut frame: W<Frame>, element: (Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)) -> Vec<S<Frame>> {
         let (assn, constraints, info) = element;
         let args: Vec<W<Meta>> = assn.args.iter().map(|x| x.downgrade()).collect();
         let mut unassigned = frame.borrow().component.unassigned.clone();
@@ -103,17 +103,10 @@ impl Prover {
                 entropy,
                 Some(frame.clone()),
             );
-            if child_frame.prune() { 
-                frame.borrow_mut().children = Some(children); 
-                return false; 
-            }
-            
             let child = S::new(child_frame);
-            self.frames.push(child.downgrade());
             children.push(child);
         }
-        frame.borrow_mut().children = Some(children);
-        return true;
+        return children;
     }
 
     /// Gets the current (partial) term of the prover.
@@ -236,12 +229,14 @@ impl Prover {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             if self.size < max_size { 
                 // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-                // TODO backtrack on fuel exhaustion.
                 // Heuristic: choose the metavariable with rigid equation, or hardest, but take into account remaining fuel.
                 if let Some(mut frame) = self.frames.pop() {
                     self.size += 1;
                     if let Some(element) = frame.borrow_mut().domain.pop() {
-                        if self.assign(frame.clone(), element) {
+                        let children = self.assign(frame.clone(), element);
+                        if children.iter().all(|x| !x.borrow().prune()) {
+                            self.frames.extend(children.iter().map(|x| x.downgrade()));
+                            frame.borrow_mut().children = Some(children);
                             continue;
                         }
                     }
@@ -283,7 +278,10 @@ impl Prover {
 
         // Replay the assignment: creates the fresh child frames (with fresh child
         // metas as the assignment's args) and wires their parent pointers to new_frame
-        self.assign(new_frame.clone(), element);
+        let children = self.assign(new_frame.clone(), element);
+        self.frames.extend(children.iter().map(|x| x.downgrade()));
+        new_frame.borrow_mut().children = Some(children);
+        
         self.size += 1;
 
         // Recurse into each child, matching original --> clone by index.
