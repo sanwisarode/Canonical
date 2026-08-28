@@ -17,16 +17,16 @@ theorem Cantor (f : X → Set X) : ¬Surjective f :=
   by canonical 20 [false_of_a_eq_not_a, congrFun]
 
 
-inductive Vec (A : Type) : Nat → Type u where
-| vnil  : Vec A 0
-| vcons : A → {n : Nat} → Vec A n → Vec A (n+1)
+-- inductive Vec (A : Type) : Nat → Type u where
+-- | vnil  : Vec A 0
+-- | vcons : A → {n : Nat} → Vec A n → Vec A (n+1)
 
-noncomputable def append : Vec α n → Vec α m → Vec α (m + n) :=
-  by canonical
+-- noncomputable def append : Vec α n → Vec α m → Vec α (m + n) :=
+--   by canonical
 
 
 theorem Eq.trans' {a b c : α} (h₁ : Eq a b) (h₂ : Eq b c) : Eq a c :=
-  by canonical
+  by canonical +debug
 
 
 -- theorem List.recGen (motive : List α → List α → Prop) : (∀ (y : List α), motive [] y) →
@@ -40,9 +40,9 @@ theorem Eq.trans' {a b c : α} (h₁ : Eq a b) (h₂ : Eq b c) : Eq a c :=
 
 -- set_option trace.Meta.isDefEq true
 -- set_option pp.all true
-theorem sSup_inter_le' {α : Type} [CompleteLattice α] {s t : Set α}
-  : sSup (s ∩ t) ≤ sSup s ⊓ sSup t :=
-  by canonical [sSup_le, le_sSup, le_inf, And]
+-- theorem sSup_inter_le' {α : Type} [CompleteLattice α] {s t : Set α}
+--   : sSup (s ∩ t) ≤ sSup s ⊓ sSup t :=
+--   by canonical [sSup_le, le_sSup, le_inf, And]
 
 
 -- class Group' (α : Type u) extends Semigroup α, Inv α where
@@ -53,5 +53,5 @@ theorem sSup_inter_le' {α : Type} [CompleteLattice α] {s t : Set α}
 -- example [m : Group' R] : MulHom R R :=
 --   by canonical (count := 10)
 
-example (a b : Nat) : a + b = b + a := by
-  canonical
+-- example (a b : Nat) : a + b = b + a := by
+--   canonical

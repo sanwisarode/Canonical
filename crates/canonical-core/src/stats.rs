@@ -73,9 +73,9 @@ impl MetaInfo {
     }
     
     /// Adds new statistics information to the original `bin` of this metavariable.
-    pub fn log(&self, result: &DFSResult, entropy_gain: f64, info: &SearchInfo) {
+    pub fn log(&self, result: &DFSResult, entropy_gain: f64) {
         META_CONTROL.with_data_mut(|map| 
-            map.entry(self.bin).or_insert_with(MetaStats::new).accumulate(result, entropy_gain, info));
+            map.entry(self.bin).or_insert_with(MetaStats::new).accumulate(result, entropy_gain, &self.meta.borrow().stats));
     }
 }
 
