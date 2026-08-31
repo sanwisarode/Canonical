@@ -232,12 +232,28 @@ impl Prover {
     //     frame
     // }
 
+
+    //Selecting component based on margin = fuel - (component.meta_entropy + extra_entropy)
+    fn select_frame(&self) -> usize {
+        let mut best = 0;
+        let mut best_margin = f64::INFINITY;
+        for (i, frame) in self.frames.iter().enumerate() {
+            let frame = frame.borrow();
+            let margin = frame.fuel - (frame.component.meta_entropy + frame.extra_entropy);
+            if margin < best_margin {
+                best_margin = margin;
+                best = i;
+            }
+        }
+        best
+    }
+
     fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) && self.size < max_size {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-            // Heuristic: choose the metavariable with rigid equation, or hardest, but take into account remaining fuel.
-            let Some(mut frame) = self.frames.pop() else { callback(self.get_term()); continue };
+            if self.frames.is_empty() { callback(self.get_term()); continue }
+            let mut frame = self.frames.swap_remove(self.select_frame());
 
             if let Some(element) = frame.borrow_mut().domain.pop() {
                 let children = self.assign(frame.clone(), element);
