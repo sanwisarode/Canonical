@@ -155,7 +155,7 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, mut parent: W<Frame>) {
+    fn backtrack(&mut self, mut parent: W<Frame>) -> SearchInfo {
         // Invariant:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
@@ -163,8 +163,16 @@ impl Prover {
         let frame = parent.borrow_mut();
         if let Some(children) = &frame.children {
             for child in children {
-                self.backtrack(child.downgrade());
-                
+                let child_result = self.backtrack(child.downgrade());
+
+                let result = DFSResult {
+                    unknown_count: child_result.unknown as u32,
+                    solution_count: child_result.completed as u32,
+                    steps: child_result.steps as u32,
+                    entropy: 0.0, branching: 0, attempts: 0,
+                };
+                child.borrow().component.next.log(&result, child.borrow().component.meta_entropy);
+
                 // By our invariant, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
                 // could do away with this (except for the leaf nodes) by making
@@ -177,16 +185,17 @@ impl Prover {
                 }
             }
 
-            frame.component.next.meta.borrow_mut().unassign();
-            // TODO log assignment stats, AssignmentStats in Assignment?
+            let result = frame.component.next.meta.borrow_mut().unassign();
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
+            result
+        } else {
+            // In the case that parent.children is none, parent is unassigned.
+            // Then, by our invariant, parent will already be contained in
+            // self.frames, so no need to add it here.
+            SearchInfo { steps: 0.0, completed: false, unknown: true }
         }
-
-        // In the case that parent.children is none, parent is unassigned.
-        // Then, by our invariant, parent will already be contained in
-        // self.frames, so no need to add it here.
     }
 
     fn parallelize(&self, frame: &Frame) -> bool {
@@ -249,29 +258,30 @@ impl Prover {
     }
 
     fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
-        while RUN.load(Ordering::Relaxed) && self.size < max_size {
+        while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-            if self.frames.is_empty() { callback(self.get_term()); continue }
+            if self.frames.is_empty() { callback(self.get_term()); return }
             let mut frame = self.frames.swap_remove(self.select_frame());
 
-            if let Some(element) = frame.borrow_mut().domain.pop() {
-                let children = self.assign(frame.clone(), element);
-                self.size += 1;
-                if children.iter().all(|x| !x.borrow().prune()) {
-                    self.frames.extend(children.iter().map(|x| x.downgrade()));
+            if self.size < max_size {
+                if let Some(element) = frame.borrow_mut().domain.pop() {
+                    let children = self.assign(frame.clone(), element);
+                    self.size += 1;
+                    if children.iter().all(|x| !x.borrow().prune()) {
+                        self.frames.extend(children.iter().map(|x| x.downgrade()));
+                        frame.borrow_mut().children = Some(children);
+                        continue;
+                    }
                     frame.borrow_mut().children = Some(children);
-                    continue;
                 }
-                frame.borrow_mut().children = Some(children);
             }
 
             if let Some(parent) = frame.borrow().parent.clone() {
-                frame.borrow_mut().component.next.log(&DFSResult { unknown_count: 1, solution_count: 0, steps: 0, entropy: 0.0, branching: 0, attempts: 0 }, 1.0); 
                 self.backtrack(parent);
             } else {
                 self.frames.push(frame);
-                return 
+                return
             }
         }
         self.backtrack(self.frame.downgrade());
