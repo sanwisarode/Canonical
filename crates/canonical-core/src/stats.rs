@@ -142,7 +142,7 @@ impl MetaStats {
             self.completed_count += 1;
         }
         self.log_entropy_gain += entropy_gain.ln_1p();
-        if result.unknown_count == 0 {
+        if !info.unknown {
             self.failures += 1;
         }
     }

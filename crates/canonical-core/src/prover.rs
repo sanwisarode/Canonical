@@ -194,6 +194,9 @@ impl Prover {
             // In the case that parent.children is none, parent is unassigned.
             // Then, by our invariant, parent will already be contained in
             // self.frames, so no need to add it here.
+            if !frame.domain.is_empty() {
+                frame.component.next.meta.borrow_mut().stats.unknown = true;
+            }
             SearchInfo { steps: 0.0, completed: false, unknown: true }
         }
     }
