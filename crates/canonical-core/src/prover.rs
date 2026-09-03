@@ -155,7 +155,7 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, mut parent: W<Frame>) -> SearchInfo {
+    fn backtrack(&mut self, mut parent: W<Frame>) {
         // Invariant:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
@@ -163,15 +163,11 @@ impl Prover {
         let frame = parent.borrow_mut();
         if let Some(children) = &frame.children {
             for child in children {
-                let child_result = self.backtrack(child.downgrade());
-
-                let result = DFSResult {
-                    unknown_count: child_result.unknown as u32,
-                    solution_count: child_result.completed as u32,
-                    steps: child_result.steps as u32,
-                    entropy: 0.0, branching: 0, attempts: 0,
-                };
-                child.borrow().component.next.log(&result, child.borrow().component.meta_entropy);
+                self.backtrack(child.downgrade());
+                child.borrow()
+                    .component
+                    .next
+                    .log(child.borrow().component.meta_entropy);
 
                 // By our invariant, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -185,11 +181,10 @@ impl Prover {
                 }
             }
 
-            let result = frame.component.next.meta.borrow_mut().unassign();
+            frame.component.next.meta.borrow_mut().unassign();
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
-            result
         } else {
             // In the case that parent.children is none, parent is unassigned.
             // Then, by our invariant, parent will already be contained in
@@ -197,7 +192,6 @@ impl Prover {
             if !frame.domain.is_empty() {
                 frame.component.next.meta.borrow_mut().stats.unknown = true;
             }
-            SearchInfo { steps: 0.0, completed: false, unknown: true }
         }
     }
 

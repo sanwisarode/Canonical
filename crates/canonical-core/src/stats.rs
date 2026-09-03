@@ -73,9 +73,9 @@ impl MetaInfo {
     }
     
     /// Adds new statistics information to the original `bin` of this metavariable.
-    pub fn log(&self, result: &DFSResult, entropy_gain: f64) {
+    pub fn log(&self, entropy_gain: f64) {
         META_CONTROL.with_data_mut(|map| 
-            map.entry(self.bin).or_insert_with(MetaStats::new).accumulate(result, entropy_gain, &self.meta.borrow().stats));
+            map.entry(self.bin).or_insert_with(MetaStats::new).accumulate(entropy_gain, &self.meta.borrow().stats));
     }
 }
 
@@ -136,8 +136,8 @@ impl MetaStats {
         MetaStats { steps: 0.0, attempts: 0, failures: 0, log_entropy_gain: 0.0, completed_count: 0 }
     }
 
-    /// Add the `result` from the DFS subtree and the metavariable lifetime `info` to the statistics.
-    fn accumulate(&mut self, result: &DFSResult, entropy_gain: f64, info: &SearchInfo) {
+    /// Add the metavariable lifetime `info` to the statistics.
+    fn accumulate(&mut self, entropy_gain: f64, info: &SearchInfo) {
         self.attempts += 1;
         self.steps += info.steps;
         if info.completed {
