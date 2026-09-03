@@ -271,6 +271,8 @@ impl Prover {
                         continue;
                     }
                     frame.borrow_mut().children = Some(children);
+                    self.backtrack(frame);
+                    continue;
                 }
             }
 
