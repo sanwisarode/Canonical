@@ -111,9 +111,11 @@ impl SearchInfo {
     }
 
     pub fn add_arg(&mut self, info: &SearchInfo) {
+        let unsat = (!self.completed && !self.unknown) || (!info.completed && !info.unknown);
+
         self.steps += info.steps;
         self.completed = self.completed && info.completed;
-        self.unknown = self.unknown || info.unknown;
+        self.unknown = !unsat && (self.unknown || info.unknown);
     }
 }
 
