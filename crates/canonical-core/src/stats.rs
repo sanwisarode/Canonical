@@ -96,11 +96,11 @@ pub struct SearchInfo {
 impl SearchInfo {
     /// The `SearchInfo` of a new metavariable.
     pub fn new_branch() -> Self {
-        SearchInfo { steps: 0.0, completed: false, unknown: false }
+        SearchInfo { steps: 0.0, completed: false, unknown: true }
     }
 
     pub fn new_arg() -> Self {
-        SearchInfo { steps: 1.0, completed: true, unknown: false }
+        SearchInfo { steps: 1.0, completed: true, unknown: true }
     }
 
     /// Add `info` into `self`.
@@ -111,11 +111,9 @@ impl SearchInfo {
     }
 
     pub fn add_arg(&mut self, info: &SearchInfo) {
-        let unsat = (!self.completed && !self.unknown) || (!info.completed && !info.unknown);
-
         self.steps += info.steps;
         self.completed = self.completed && info.completed;
-        self.unknown = !unsat && (self.unknown || info.unknown);
+        self.unknown = self.unknown || info.unknown;
     }
 }
 

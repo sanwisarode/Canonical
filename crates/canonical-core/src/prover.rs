@@ -144,12 +144,10 @@ impl Prover {
             ASSIGNMENT_MAP.store(Arc::new(ASSIGNMENT_CONTROL.probe_tls()));
             
             // If all branches were fully explored, we can terminate.
-            // let fail = result.unknown_count == 0;
-            // acc.add(result);
-            // if fail { 
-            //     RUN.store(false, Ordering::Relaxed);
-            //     return (acc, previous_steps)
-            // }
+            if !self.frame.borrow().stats.unknown {
+                RUN.store(false, Ordering::Relaxed);
+                return (acc, previous_steps)
+            }
         }
         acc.steps = STEP_COUNT.load(Ordering::Relaxed);
         (acc, previous_steps)
@@ -185,13 +183,6 @@ impl Prover {
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
-        } else {
-            // In the case that parent.children is none, parent is unassigned.
-            // Then, by our invariant, parent will already be contained in
-            // self.frames, so no need to add it here.
-            if !frame.domain.is_empty() {
-                frame.component.next.meta.borrow_mut().stats.unknown = true;
-            }
         }
     }
 
@@ -264,14 +255,14 @@ impl Prover {
             if self.size < max_size {
                 if let Some(element) = frame.borrow_mut().domain.pop() {
                     let children = self.assign(frame.clone(), element);
-                    self.size += 1;
-                    if children.iter().all(|x| !x.borrow().prune()) {
+                    if children.iter().any(|x| x.borrow().prune()) {
+                        frame.borrow_mut().component.next.meta.borrow_mut().unassign();
+                        self.frames.push(frame);
+                    } else {
+                        self.size += 1;
                         self.frames.extend(children.iter().map(|x| x.downgrade()));
-                        frame.borrow_mut().children = Some(children);
-                        continue;
+                        frame.borrow_mut().children = Some(children);   
                     }
-                    frame.borrow_mut().children = Some(children);
-                    self.backtrack(frame);
                     continue;
                 }
             }
@@ -279,7 +270,7 @@ impl Prover {
             if let Some(parent) = frame.borrow().parent.clone() {
                 self.backtrack(parent);
             } else {
-                self.frames.push(frame);
+                self.frames.push(frame); // last iteration adds the frame back.
                 return
             }
         }
@@ -331,7 +322,6 @@ impl Prover {
 }
 
 impl Clone for Prover {
- 
     fn clone(&self) -> Self {
         let meta = S::new(Meta::new(self.meta.borrow().typ.as_ref().unwrap().clone()));
 
