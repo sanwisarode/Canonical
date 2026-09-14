@@ -105,9 +105,7 @@ impl Prover {
         let mut children = Vec::new();
         for component in components {
             let entropy = extra_entropy + sum - component.meta_entropy;
-            let mut child_frame = Frame::new(component,
-                Some(frame.clone()),
-            );
+            let mut child_frame = Frame::new(component, Some(frame.clone()));
             child_frame.populate(fuel, entropy);
             let child = S::new(child_frame);
             children.push(child);
@@ -124,7 +122,7 @@ impl Prover {
     pub fn prove<F>(&mut self, callback: &F, verbose: bool) -> (DFSResult, u32) where F: Fn(Term) + Send + Sync {
         reset();
         let mut depth = 1e4;
-        let mut previous_steps = 0;
+        let previous_steps = 0;
         let mut acc = DFSResult { unknown_count: 0, steps: 0, entropy: 1.0, solution_count: 0, attempts: 0, branching: 0 };
         // Iterative deepening. 
         while RUN.load(Ordering::Relaxed) {
@@ -142,12 +140,6 @@ impl Prover {
             // Update the global statistics maps.
             META_MAP.store(Arc::new(META_CONTROL.probe_tls()));
             ASSIGNMENT_MAP.store(Arc::new(ASSIGNMENT_CONTROL.probe_tls()));
-            
-            // If all branches were fully explored, we can terminate.
-            if !self.frame.borrow().stats.unknown {
-                RUN.store(false, Ordering::Relaxed);
-                return (acc, previous_steps)
-            }
         }
         acc.steps = STEP_COUNT.load(Ordering::Relaxed);
         (acc, previous_steps)
@@ -162,10 +154,8 @@ impl Prover {
         if let Some(children) = &frame.children {
             for child in children {
                 self.backtrack(child.downgrade());
-                child.borrow()
-                    .component
-                    .next
-                    .log(child.borrow().component.meta_entropy);
+                let c = child.borrow();
+                c.component.next.log(c.component.meta_entropy);
 
                 // By our invariant, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -183,6 +173,8 @@ impl Prover {
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
+        } else if !frame.domain.is_empty() {
+            frame.component.next.meta.borrow_mut().stats.unknown = true;
         }
     }
 
@@ -257,6 +249,7 @@ impl Prover {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
                         frame.borrow_mut().component.next.meta.borrow_mut().unassign();
+                        frame.borrow_mut().component.next.meta.borrow_mut().stats.unknown = true;
                         self.frames.push(frame);
                     } else {
                         self.size += 1;

@@ -53,11 +53,7 @@ fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<W<Meta>, Vec<(W<Meta>, bo
     let mut result: HashMap<W<Meta>, Vec<(W<Meta>, bool)>> = HashMap::new();
     for mvar in unassigned.iter() {
         for (i, codomain) in involved(mvar.clone()).into_iter() {
-            if !result.contains_key(&i) {
-                result.insert(i.clone(), Vec::new());
-            }
-            let arr = result.get_mut(&i).unwrap();
-            arr.push((mvar.clone(), codomain)); // TODO missing optimization if it's already at the last.
+            result.entry(i).or_default().push((mvar.clone(), codomain)); // TODO missing optimization if it's already at the last.
         }
     }
     result

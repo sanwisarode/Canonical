@@ -17,9 +17,12 @@ impl MetaInfo {
         let prob_non_rigid = div(self.current_stats.attempts as f64, self.future_stats.attempts as f64, 1.0, 100.0);
         let steps_per_completion = div(self.current_stats.steps as f64, self.current_stats.completed_count as f64, 5.0, 100.0);
 
-        // We take the weighted average of 1 and the average number of steps per completion, 
+        let resolved_rate = div(self.current_stats.failures as f64, self.current_stats.attempts as f64, 1.0, 100.0);
+        let intractability = 1.0 / resolved_rate.max(1e-3);
+
+        // We take the weighted average of 1 and the average number of steps per completion,
         // weighted by the probability that this metavariable obtains a rigid equation.
-        ((1.0 - prob_non_rigid) + prob_non_rigid*steps_per_completion).clamp(1.0, 1000.0)
+        ((1.0 - prob_non_rigid) + prob_non_rigid*steps_per_completion*intractability).clamp(1.0, 1000.0)
     }
 }
 
