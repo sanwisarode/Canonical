@@ -41,27 +41,19 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
     }
 }
 
-fn index_map(unassigned: &[W<Meta>]) -> HashMap<W<Meta>, usize> {
-    let mut indices: HashMap<W<Meta>, usize> = HashMap::default();
-    for (i, x) in unassigned.iter().enumerate() {
-        indices.insert(x.clone(), i);
-    }
-    indices
-}
-
-fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<W<Meta>, Vec<(W<Meta>, bool)>> {
-    let mut result: HashMap<W<Meta>, Vec<(W<Meta>, bool)>> = HashMap::new();
-    for mvar in unassigned.iter() {
-        for (i, codomain) in involved(mvar.clone()).into_iter() {
-            result.entry(i).or_default().push((mvar.clone(), codomain)); // TODO missing optimization if it's already at the last.
+fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<W<Meta>, Vec<(usize, bool)>> {
+    let mut result: HashMap<W<Meta>, Vec<(usize, bool)>> = HashMap::new();
+    for (i, mvar) in unassigned.iter().enumerate() {
+        for (target, codomain) in involved(mvar.clone()).into_iter() {
+            result.entry(target).or_default().push((i, codomain)); // TODO missing optimization if it's already at the last.
         }
     }
     result
 }
 
 /// Union metavariables whose assignments interact
-fn partition(unassigned: &[W<Meta>], indices: &HashMap<W<Meta>, usize>,
-             involved_inverse: &HashMap<W<Meta>, Vec<(W<Meta>, bool)>>) -> Vec<Vec<NextInfo>> {
+fn partition(unassigned: &[W<Meta>],
+             involved_inverse: &HashMap<W<Meta>, Vec<(usize, bool)>>) -> Vec<Vec<NextInfo>> {
     let mut uf = QuickUnionUf::<UnionBySize>::new(unassigned.len());
     let mut eligible: Vec<bool> = vec![true; unassigned.len()];
     for (i, mvar) in unassigned.iter().enumerate() {
@@ -69,7 +61,7 @@ fn partition(unassigned: &[W<Meta>], indices: &HashMap<W<Meta>, usize>,
         while let Some(p) = parent {
             if let Some(arr) = involved_inverse.get(p) {
                 for (o, codomain) in arr {
-                    uf.union(i, *indices.get(o).unwrap());
+                    uf.union(i, *o);
                     if *codomain {
                         eligible[i] = false;
                     }
@@ -94,25 +86,22 @@ fn partition(unassigned: &[W<Meta>], indices: &HashMap<W<Meta>, usize>,
     buckets
 }
 
-fn entropy(component: &[NextInfo]) -> f64 {
-    component.iter().map(|mvar| MetaInfo::new(mvar.meta.clone()).difficulty()).product()
+fn entropy(infos: &[MetaInfo]) -> f64 {
+    infos.iter().map(|info| info.difficulty()).product()
 }
 
 // Choose the metavariable to refine next in a component
-fn select_next(component: &[NextInfo]) -> (MetaInfo, usize) {
-    let mut infos = Vec::with_capacity(component.len());
+fn select_next(component: &[NextInfo], infos: &[MetaInfo]) -> usize {
+    let mut eligible = Vec::with_capacity(component.len());
     for (i, mvar) in component.iter().enumerate() {
-        let info = MetaInfo::new(mvar.meta.clone());
-        let has_rigid_equation = info.has_rigid_equation;
-        let next = (info, i);
-        if has_rigid_equation { return next }
-        if mvar.eligible { infos.push(next); }
+        if infos[i].has_rigid_equation { return i }
+        if mvar.eligible { eligible.push(i); }
     }
 
-    let mut best = infos.pop().expect("No eligible mvars!");
-    for info in infos.into_iter() {
-        if info.0.difficulty() > best.0.difficulty() {
-            best = info;
+    let mut best = eligible.pop().expect("No eligible mvars!");
+    for i in eligible.into_iter() {
+        if infos[i].difficulty() > infos[best].difficulty() {
+            best = i;
         }
     }
     best
@@ -120,13 +109,14 @@ fn select_next(component: &[NextInfo]) -> (MetaInfo, usize) {
 
 // Partition the unassigned metavariables into independent components and choosing next mvar
 pub fn split(unassigned: Vec<W<Meta>>) -> Vec<Component> {
-    let indices = index_map(&unassigned);
     let involved_inverse = involved_inverse(&unassigned);
-    let buckets = partition(&unassigned, &indices, &involved_inverse);
+    let buckets = partition(&unassigned, &involved_inverse);
 
     buckets.into_iter().map(|component| {
-        let meta_entropy = entropy(&component);
-        let (next, next_index) = select_next(&component);
+        let mut infos: Vec<MetaInfo> = component.iter().map(|x| MetaInfo::new(x.meta.clone())).collect();
+        let meta_entropy = entropy(&infos);
+        let next_index = select_next(&component, &infos);
+        let next = infos.swap_remove(next_index);
 
         let mut unassigned: Vec<W<Meta>> = component.into_iter().map(|x| x.meta).collect();
         // We use swap_remove for O(1) complexity since ordering does not matter anymore.

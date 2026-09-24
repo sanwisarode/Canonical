@@ -173,8 +173,6 @@ impl Prover {
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
-        } else if !frame.domain.is_empty() {
-            frame.component.next.meta.borrow_mut().stats.unknown = true;
         }
     }
 
