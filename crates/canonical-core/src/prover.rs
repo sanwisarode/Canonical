@@ -158,12 +158,13 @@ impl Prover {
                 // should make the unknown flag dirty (i.e.  it should propagate
                 // up from the children to the parent). Perhaps this means we
                 // should also be propagating up other statistics from the
-                // children to the parent in backtrack?
+                // children to the parent in backtrack? This could also be how
+                // we combine together multiple solutions from child components.
 
                 // Currently, the unknown flag doesn't affect anything other
                 // than the failure count, but the failure count is never used
                 // anywhere
-                frame.component.next.meta.borrow_mut().stats.add_branch(
+                frame.component.next.meta.borrow_mut().stats.add_arg(
                     &c.component.next.meta.borrow().stats
                 );
                 c.component.next.log(c.component.meta_entropy);
