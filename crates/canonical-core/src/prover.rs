@@ -146,18 +146,29 @@ impl Prover {
     }
 
     fn backtrack(&mut self, mut parent: W<Frame>) {
-        // Invariant:
+        // Post-condition:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
-        // 3) parent accumulates all SearchInfo's from descendants
         let frame = parent.borrow_mut();
         if let Some(children) = &frame.children {
             for child in children {
                 self.backtrack(child.downgrade());
                 let c = child.borrow();
+                // Note quite sure if this is fully right. At the very least we
+                // should make the unknown flag dirty (i.e.  it should propagate
+                // up from the children to the parent). Perhaps this means we
+                // should also be propagating up other statistics from the
+                // children to the parent in backtrack?
+
+                // Currently, the unknown flag doesn't affect anything other
+                // than the failure count, but the failure count is never used
+                // anywhere
+                frame.component.next.meta.borrow_mut().stats.add_branch(
+                    &c.component.next.meta.borrow().stats
+                );
                 c.component.next.log(c.component.meta_entropy);
 
-                // By our invariant, child will now be unassigned and added to
+                // By our post-condition, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
                 // could do away with this (except for the leaf nodes) by making
                 // a backtrack_helper function that strictly does unassigning
