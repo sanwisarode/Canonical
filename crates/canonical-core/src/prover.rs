@@ -19,7 +19,12 @@ struct Frame {
     fuel: f64,
     extra_entropy: f64,
     parent: Option<W<Frame>>,
-    
+
+    // Whether any branch in this subtree was cut off by fuel (pruned) rather than fully explored.
+    // False means the subtree is fully known: every branch was either SAT or UNSAT.
+    // True means UNKNOWN : we can't conclude the subtree has no solution.
+    unknown: bool,
+
     /// The owned children frames. This is `None` if the current frame is
     /// unassigned.
     children: Option<Vec<S<Frame>>>
@@ -37,7 +42,7 @@ pub struct Prover {
 
 impl Frame {
     fn new(component: Component, parent: Option<W<Frame>>) -> Self {
-        Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_branch(), children: None }
+        Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_branch(), unknown: false, children: None }
     }
 
     fn populate(&mut self, fuel: f64, extra_entropy: f64) {
@@ -145,14 +150,16 @@ impl Prover {
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, mut parent: W<Frame>) {
+    fn backtrack(&mut self, mut parent: W<Frame>) -> bool {
         // Post-condition:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
         let frame = parent.borrow_mut();
         if let Some(children) = &frame.children {
+            let mut unknown = frame.unknown;
             for child in children {
-                self.backtrack(child.downgrade());
+                let child_unknown = self.backtrack(child.downgrade());
+                unknown = unknown || child_unknown;
                 let c = child.borrow();
                 // Note quite sure if this is fully right. At the very least we
                 // should make the unknown flag dirty (i.e.  it should propagate
@@ -167,7 +174,7 @@ impl Prover {
                 frame.component.next.meta.borrow_mut().stats.add_arg(
                     &c.component.next.meta.borrow().stats
                 );
-                c.component.next.log(c.component.meta_entropy);
+                c.component.next.log(c.component.meta_entropy, child_unknown);
 
                 // By our post-condition, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -185,6 +192,9 @@ impl Prover {
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
+            unknown
+        } else {
+            frame.unknown
         }
     }
 
@@ -259,7 +269,7 @@ impl Prover {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
                         frame.borrow_mut().component.next.meta.borrow_mut().unassign();
-                        frame.borrow_mut().component.next.meta.borrow_mut().stats.unknown = true;
+                        frame.borrow_mut().unknown = true;
                         self.frames.push(frame);
                     } else {
                         self.size += 1;

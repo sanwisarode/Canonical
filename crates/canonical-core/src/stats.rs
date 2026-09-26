@@ -73,9 +73,9 @@ impl MetaInfo {
     }
     
     /// Adds new statistics information to the original `bin` of this metavariable.
-    pub fn log(&self, entropy_gain: f64) {
-        META_CONTROL.with_data_mut(|map| 
-            map.entry(self.bin).or_insert_with(MetaStats::new).accumulate(entropy_gain, &self.meta.borrow().stats));
+    pub fn log(&self, entropy_gain: f64, failure: bool) {
+        META_CONTROL.with_data_mut(|map|
+            map.entry(self.bin).or_insert_with(MetaStats::new).accumulate(entropy_gain, &self.meta.borrow().stats, failure));
     }
 }
 
@@ -86,36 +86,28 @@ impl MetaInfo {
 #[derive(Clone)]
 pub struct SearchInfo {
     pub steps: f64,
-    pub completed: bool,
-    // Whether any branch in this subtree was cut off by fuel (pruned) rather than fully explored. 
-    // False means the subtree is fully known: every branch was either SAT or UNSAT. 
-    // True means UNKNOWN : we can't conclude the subtree has no solution.
-    pub unknown: bool
+    pub completed: bool
 }
 
 impl SearchInfo {
     /// The `SearchInfo` of a new metavariable.
     pub fn new_branch() -> Self {
-        SearchInfo { steps: 0.0, completed: false, unknown: false }
+        SearchInfo { steps: 0.0, completed: false }
     }
 
     pub fn new_arg() -> Self {
-        SearchInfo { steps: 1.0, completed: true, unknown: false }
+        SearchInfo { steps: 1.0, completed: true }
     }
 
     /// Add `info` into `self`.
     pub(crate) fn add_branch(&mut self, info: &SearchInfo) {
         self.steps += info.steps;
         self.completed = self.completed || info.completed;
-        self.unknown = self.unknown || info.unknown;
     }
 
     pub fn add_arg(&mut self, info: &SearchInfo) {
-        let unsat = (!self.completed && !self.unknown) || (!info.completed && !info.unknown);
-
         self.steps += info.steps;
         self.completed = self.completed && info.completed;
-        self.unknown = !unsat && (self.unknown || info.unknown);
     }
 }
 
@@ -137,14 +129,14 @@ impl MetaStats {
     }
 
     /// Add the metavariable lifetime `info` to the statistics.
-    fn accumulate(&mut self, entropy_gain: f64, info: &SearchInfo) {
+    fn accumulate(&mut self, entropy_gain: f64, info: &SearchInfo, failure: bool) {
         self.attempts += 1;
         self.steps += info.steps;
         if info.completed {
             self.completed_count += 1;
         }
         self.log_entropy_gain += entropy_gain.ln_1p();
-        if !info.unknown {
+        if !failure {
             self.failures += 1;
         }
     }
