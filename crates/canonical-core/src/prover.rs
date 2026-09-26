@@ -62,6 +62,8 @@ impl Frame {
         self.fuel = fuel;
         self.extra_entropy = extra_entropy;
         self.domain = domain;
+        self.stats = SearchInfo::new_branch();
+        self.unknown = false;
     }
 
     fn prune(&self) -> bool {
@@ -135,43 +137,41 @@ impl Prover {
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             // self.frame.borrow_mut().fuel = depth;
             self.frame.borrow_mut().populate(depth, 0.0);
-            self.dfs(max_size, callback);
+            let unknown = self.dfs(max_size, callback);
 
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
-            
+
             // previous_steps = result.steps;
             depth *= 3.0;
 
             // Update the global statistics maps.
             META_MAP.store(Arc::new(META_CONTROL.probe_tls()));
             ASSIGNMENT_MAP.store(Arc::new(ASSIGNMENT_CONTROL.probe_tls()));
+
+            if !unknown {
+                RUN.store(false, Ordering::Relaxed);
+            }
         }
         acc.steps = STEP_COUNT.load(Ordering::Relaxed);
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, mut parent: W<Frame>) -> bool {
+    fn backtrack(&mut self, mut parent: W<Frame>, trigger: Option<W<Frame>>) -> bool {
         // Post-condition:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
         let frame = parent.borrow_mut();
         if let Some(children) = &frame.children {
             let mut unknown = frame.unknown;
+            let mut branch = SearchInfo::new_arg();
             for child in children {
-                let child_unknown = self.backtrack(child.downgrade());
+                let child_unknown = self.backtrack(child.downgrade(), None);
                 unknown = unknown || child_unknown;
                 let c = child.borrow();
-                // Note quite sure if this is fully right. At the very least we
-                // should make the unknown flag dirty (i.e.  it should propagate
-                // up from the children to the parent). Perhaps this means we
-                // should also be propagating up other statistics from the
-                // children to the parent in backtrack? This could also be how
-                // we combine together multiple solutions from child components.
-
-                // Currently, the unknown flag doesn't affect anything other
-                // than the failure count, but the failure count is never used
-                // anywhere
-                c.component.next.log(c.component.meta_entropy, child_unknown);
+                branch.add_arg(&c.stats);
+                if trigger.as_ref().map_or(false, |t| t.points_to(child)) {
+                    c.component.next.log(c.component.meta_entropy, &c.stats, child_unknown);
+                }
 
                 // By our post-condition, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -185,13 +185,15 @@ impl Prover {
                 }
             }
 
+            frame.stats.add_branch(&branch);
+            frame.unknown = unknown;
             frame.component.next.meta.borrow_mut().unassign();
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
             unknown
         } else {
-            frame.unknown
+            frame.unknown || !frame.domain.is_empty()
         }
     }
 
@@ -254,37 +256,43 @@ impl Prover {
         best
     }
 
-    fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F) -> bool where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-            if self.frames.is_empty() { callback(self.get_term()); return }
+            if self.frames.is_empty() { callback(self.get_term()); return false }
             let mut frame = self.frames.swap_remove(self.select_frame());
 
             if self.size < max_size {
                 if let Some(element) = frame.borrow_mut().domain.pop() {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
+                        let mut branch = SearchInfo::new_arg();
+                        for c in &children { branch.add_arg(&c.borrow().stats); }
+                        frame.borrow_mut().stats.add_branch(&branch);
                         frame.borrow_mut().component.next.meta.borrow_mut().unassign();
                         frame.borrow_mut().unknown = true;
                         self.frames.push(frame);
                     } else {
                         self.size += 1;
                         self.frames.extend(children.iter().map(|x| x.downgrade()));
-                        frame.borrow_mut().children = Some(children);   
+                        frame.borrow_mut().children = Some(children);
                     }
                     continue;
                 }
+            } else {
+                frame.borrow_mut().unknown = true;
             }
 
             if let Some(parent) = frame.borrow().parent.clone() {
-                self.backtrack(parent);
+                self.backtrack(parent, Some(frame.clone()));
             } else {
+                let unknown = frame.borrow().unknown;
                 self.frames.push(frame); // last iteration adds the frame back.
-                return
+                return unknown
             }
         }
-        self.backtrack(self.frame.downgrade());
+        self.backtrack(self.frame.downgrade(), None)
     }
 }
 
