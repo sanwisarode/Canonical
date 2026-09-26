@@ -171,9 +171,6 @@ impl Prover {
                 // Currently, the unknown flag doesn't affect anything other
                 // than the failure count, but the failure count is never used
                 // anywhere
-                frame.component.next.meta.borrow_mut().stats.add_arg(
-                    &c.component.next.meta.borrow().stats
-                );
                 c.component.next.log(c.component.meta_entropy, child_unknown);
 
                 // By our post-condition, child will now be unassigned and added to
