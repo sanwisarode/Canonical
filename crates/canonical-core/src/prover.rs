@@ -20,11 +20,6 @@ struct Frame {
     extra_entropy: f64,
     parent: Option<W<Frame>>,
 
-    // Whether any branch in this subtree was cut off by fuel (pruned) rather than fully explored.
-    // False means the subtree is fully known: every branch was either SAT or UNSAT.
-    // True means UNKNOWN : we can't conclude the subtree has no solution.
-    unknown: bool,
-
     /// The owned children frames. This is `None` if the current frame is
     /// unassigned.
     children: Option<Vec<S<Frame>>>
@@ -42,7 +37,7 @@ pub struct Prover {
 
 impl Frame {
     fn new(component: Component, parent: Option<W<Frame>>) -> Self {
-        Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_branch(), unknown: false, children: None }
+        Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_branch(), children: None }
     }
 
     fn populate(&mut self, fuel: f64, extra_entropy: f64) {
@@ -62,8 +57,6 @@ impl Frame {
         self.fuel = fuel;
         self.extra_entropy = extra_entropy;
         self.domain = domain;
-        self.stats = SearchInfo::new_branch();
-        self.unknown = false;
     }
 
     fn prune(&self) -> bool {
@@ -137,7 +130,7 @@ impl Prover {
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             // self.frame.borrow_mut().fuel = depth;
             self.frame.borrow_mut().populate(depth, 0.0);
-            let unknown = self.dfs(max_size, callback);
+            self.dfs(max_size, callback);
 
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
 
@@ -147,31 +140,19 @@ impl Prover {
             // Update the global statistics maps.
             META_MAP.store(Arc::new(META_CONTROL.probe_tls()));
             ASSIGNMENT_MAP.store(Arc::new(ASSIGNMENT_CONTROL.probe_tls()));
-
-            if !unknown {
-                RUN.store(false, Ordering::Relaxed);
-            }
         }
         acc.steps = STEP_COUNT.load(Ordering::Relaxed);
         (acc, previous_steps)
     }
 
-    fn backtrack(&mut self, mut parent: W<Frame>, trigger: Option<W<Frame>>) -> bool {
+    fn backtrack(&mut self, mut parent: W<Frame>) {
         // Post-condition:
         // 1) All frames with frame.parent as an ancestor are unassigned and dropped
         // 2) frame.parent is unassigned and added back to self.frames
         let frame = parent.borrow_mut();
         if let Some(children) = &frame.children {
-            let mut unknown = frame.unknown;
-            let mut branch = SearchInfo::new_arg();
             for child in children {
-                let child_unknown = self.backtrack(child.downgrade(), None);
-                unknown = unknown || child_unknown;
-                let c = child.borrow();
-                branch.add_arg(&c.stats);
-                if trigger.as_ref().map_or(false, |t| t.points_to(child)) {
-                    c.component.next.log(c.component.meta_entropy, &c.stats, child_unknown);
-                }
+                self.backtrack(child.downgrade());
 
                 // By our post-condition, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -185,15 +166,12 @@ impl Prover {
                 }
             }
 
-            frame.stats.add_branch(&branch);
-            frame.unknown = unknown;
             frame.component.next.meta.borrow_mut().unassign();
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
-            unknown
-        } else {
-            frame.unknown || !frame.domain.is_empty()
+        } else if !frame.domain.is_empty() {
+            frame.component.next.meta.borrow_mut().stats.unknown = true;
         }
     }
 
@@ -256,22 +234,19 @@ impl Prover {
         best
     }
 
-    fn dfs<F>(&mut self, max_size: usize, callback: &F) -> bool where F: Fn(Term) + Send + Sync {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
             STEP_COUNT.fetch_add(1, Ordering::Relaxed);
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-            if self.frames.is_empty() { callback(self.get_term()); return false }
+            if self.frames.is_empty() { callback(self.get_term()); return }
             let mut frame = self.frames.swap_remove(self.select_frame());
 
             if self.size < max_size {
                 if let Some(element) = frame.borrow_mut().domain.pop() {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
-                        let mut branch = SearchInfo::new_arg();
-                        for c in &children { branch.add_arg(&c.borrow().stats); }
-                        frame.borrow_mut().stats.add_branch(&branch);
                         frame.borrow_mut().component.next.meta.borrow_mut().unassign();
-                        frame.borrow_mut().unknown = true;
+                        frame.borrow_mut().component.next.meta.borrow_mut().stats.unknown = true;
                         self.frames.push(frame);
                     } else {
                         self.size += 1;
@@ -281,18 +256,18 @@ impl Prover {
                     continue;
                 }
             } else {
-                frame.borrow_mut().unknown = true;
+                frame.borrow_mut().component.next.meta.borrow_mut().stats.unknown = true;
             }
 
             if let Some(parent) = frame.borrow().parent.clone() {
-                self.backtrack(parent, Some(frame.clone()));
+                frame.borrow().component.next.log(frame.borrow().component.meta_entropy);
+                self.backtrack(parent);
             } else {
-                let unknown = frame.borrow().unknown;
                 self.frames.push(frame); // last iteration adds the frame back.
-                return unknown
+                return
             }
         }
-        self.backtrack(self.frame.downgrade(), None)
+        self.backtrack(self.frame.downgrade());
     }
 }
 
