@@ -254,7 +254,8 @@ impl IRSpine {
         }
  
         (Meta {
-            assignment: Some(Assignment { head, args, bind, changes: Vec::new(), _owned_linked: owned_linked, has_rigid_type: true, var_type: None }),
+            assignment: Some(Assignment { head, args, bind, changes: Vec::new(), 
+                _owned_linked: owned_linked, has_rigid_type: true, var_type: None, involved: Vec::new() }),
             typ: None,
             gamma: es,
             constraints: Vec::new(),
@@ -265,6 +266,7 @@ impl IRSpine {
             had_rigid_equation: false,
             branching: 1.0,
             parent: None,
+            involved: Vec::new()
         }, used)
     }
 }

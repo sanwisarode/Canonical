@@ -18,14 +18,10 @@ pub struct Component {
 
 // The metavariables whose assignments might interact with mvar
 fn involved(mvar: W<Meta>) -> Vec<(W<Meta>, bool)> {
-    let typ = mvar.borrow().typ.as_ref().unwrap();
-    let codomain: Vec<(W<Meta>, bool)> = typ.1.get_many(&typ.0.borrow().codomain_mvars).into_iter().map(|x| (x, true)).collect();
-    let mut constraints = mvar.borrow().gamma.involved();
+    let mut result = mvar.borrow().involved.clone();
     for constraint in &mvar.borrow().constraints {
-        constraints.extend(constraint.involved())
+        constraint.involved(&mut result);
     }
-    let mut result: Vec<(W<Meta>, bool)> = constraints.into_iter().map(|x| (x, false)).collect();
-    result.extend(codomain);
     return result;
 }
 
@@ -44,8 +40,8 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<W<Meta>, Vec<(usize, bool)>> {
     let mut result: HashMap<W<Meta>, Vec<(usize, bool)>> = HashMap::new();
     for (i, mvar) in unassigned.iter().enumerate() {
-        for (target, codomain) in involved(mvar.clone()).into_iter() {
-            result.entry(target).or_default().push((i, codomain)); // TODO missing optimization if it's already at the last.
+        for (target, codomain) in involved(mvar.clone()).iter() {
+            result.entry(target.clone()).or_default().push((i, *codomain)); // TODO missing optimization if it's already at the last.
         }
     }
     result
