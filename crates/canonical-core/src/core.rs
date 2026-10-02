@@ -92,7 +92,9 @@ pub struct Meta {
     pub branching: f64,
     pub parent: Option<W<Meta>>,
 
-    pub involved: Vec<(W<Meta>, bool)>
+    pub gamma_involved: Vec<W<Meta>>,
+    pub typ_involved: Vec<W<Meta>>,
+    pub dependence: u32
 }
 
 impl Meta {
@@ -110,7 +112,9 @@ impl Meta {
             branching: 1.0,
             parent: None,
             typ: Some(typ),
-            involved: Vec::new()
+            gamma_involved: Vec::new(),
+            typ_involved: Vec::new(),
+            dependence: 0
         }
     }
 
@@ -146,27 +150,37 @@ impl Meta {
         return Some(new_constraints);
     }
 
+    pub fn codomain_dependence<const ADD: bool>(&self) {
+        for mut mvar in self.typ_involved.iter().cloned() {
+            if ADD { mvar.borrow_mut().dependence += 1 } else { mvar.borrow_mut().dependence -= 1 }
+        }
+    }
+
     /// Perform an (already tested) assignment.
     pub fn assign(&mut self, mut assn: Assignment, constraints: Vec<Box<dyn Constraint>>) {
         // store constraints with their stuck metavariable
-        for (item, slot) in constraints.into_iter().zip(assn.changes.iter_mut()) {
+        self.assignment = Some(assn);
+        for (item, slot) in constraints.into_iter().zip(self.assignment.as_mut().unwrap().changes.iter_mut()) {
             slot.borrow_mut().constraints.push(item)
         }
-        self.assignment = Some(assn);
+        self.codomain_dependence::<false>();
+        for arg in &self.assignment.as_ref().unwrap().args {
+            arg.borrow().codomain_dependence::<true>();
+        }
     }
 
     /// Unassign the metavariable, returning constraints to their pre-assignment state.
     pub fn unassign(&mut self) {
         let mut result = SearchInfo::new_arg();
-        if let Some(mut assn) = self.assignment.take() {
-            for meta in assn.changes.iter_mut() {
-                meta.borrow_mut().constraints.pop();
-            }
-
-            for arg in assn.args {
-                result.add_arg(&arg.borrow().stats);
-            }
+        for meta in self.assignment.as_mut().unwrap().changes.iter_mut() {
+            meta.borrow_mut().constraints.pop().unwrap();
         }
+        self.codomain_dependence::<true>();
+        for arg in &self.assignment.as_ref().unwrap().args {
+            result.add_arg(&arg.borrow().stats);
+            arg.borrow().codomain_dependence::<false>();
+        }
+        self.assignment = None;
         self.stats.add_branch(&result);
     }
 
@@ -199,7 +213,7 @@ pub trait Constraint: std::any::Any {
     /// Whether this constraint enforces an assignment on the stuck metavariable.
     fn rigid(&self) -> bool { false }
 
-    fn involved(&self, mvars: &mut Vec<(W<Meta>, bool)>);
+    fn involved(&self, mvars: &mut Vec<W<Meta>>);
 }
 
 /// A definitional (judgmental) equality between two `Term`s.
@@ -251,7 +265,7 @@ impl Constraint for RedexConstraint {
         }
     }
 
-    fn involved(&self, _mvars: &mut Vec<(W<Meta>, bool)>) {
+    fn involved(&self, _mvars: &mut Vec<W<Meta>>) {
         return // TODO
     }
 }
@@ -305,9 +319,9 @@ impl Constraint for Equation {
         matches!(self.goal.whnf::<true, ()>(&mut Vec::new(), &mut ()).1, Head::Var(_))
     }
 
-    fn involved(&self, mvars: &mut Vec<(W<Meta>, bool)>) {
+    fn involved(&self, mvars: &mut Vec<W<Meta>>) {
         mvars.extend(self.parent.borrow().assignment
-            .as_ref().unwrap().involved.iter().map(|x| (x.clone(), false)));
+            .as_ref().unwrap().involved.iter().cloned());
     }
 }
 
@@ -533,14 +547,13 @@ impl ES {
         return result
     }
 
-    pub fn involved(&self) -> Vec<(W<Meta>, bool)> {
+    pub fn involved(&self) -> Vec<W<Meta>> {
         let mut result = Vec::new();
         iter::successors(self.linked.clone(), |node| 
             node.borrow().tail.clone() // Iterate over the linked list.
         ).for_each(|linked| {
             if let Some(typ) = &linked.borrow().node.entry.context {
-                result.extend(typ.1.get_many(&typ.0.borrow().types_mvars)
-                    .into_iter().map(|x| (x, false)))
+                result.extend(typ.1.get_many(&typ.0.borrow().types_mvars).into_iter())
             }
         });
         return result;
@@ -711,7 +724,9 @@ impl TypeBase {
                 had_rigid_equation: false,
                 branching: 1.0,
                 parent: parent.clone(),
-                involved: Vec::new()
+                gamma_involved: Vec::new(),
+                typ_involved: Vec::new(),
+                dependence: 0
             }))
         }
         args

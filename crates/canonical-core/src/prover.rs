@@ -99,7 +99,7 @@ impl Prover {
         let extra_entropy =  frame.borrow().extra_entropy;
         frame.borrow_mut().component.next.meta.borrow_mut().assign(assn, constraints);
 
-        let components = split(unassigned);
+        let components = split(&unassigned);
         let sum: f64 = components.iter().map(|p| p.meta_entropy).sum();
 
         let mut children = Vec::new();

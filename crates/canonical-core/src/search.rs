@@ -71,9 +71,8 @@ pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<O
             bindings: arg.bindings.clone() 
         }, &mut assignment._owned_linked);
 
-        arg.involved.extend(arg.gamma.involved());
-        arg.involved.extend(typ.1.get_many(&typ.0.borrow().codomain_mvars)
-            .into_iter().map(|x| (x, true)));
+        arg.gamma_involved.extend(arg.gamma.involved());
+        arg.typ_involved.extend(typ.1.get_many(&typ.0.borrow().codomain_mvars).into_iter());
 
         arg.typ = Some(typ);
     }

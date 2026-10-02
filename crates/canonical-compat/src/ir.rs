@@ -266,7 +266,9 @@ impl IRSpine {
             had_rigid_equation: false,
             branching: 1.0,
             parent: None,
-            involved: Vec::new()
+            gamma_involved: Vec::new(),
+            typ_involved: Vec::new(),
+            dependence: 0
         }, used)
     }
 }
