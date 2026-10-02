@@ -1,7 +1,7 @@
 use crate::core::*;
 use crate::memory::*;
 use crate::stats::MetaInfo;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
 
 /// An independent component produced by split
@@ -33,11 +33,11 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
     }
 }
 
-fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<W<Meta>, Vec<usize>> {
-    let mut result: HashMap<W<Meta>, Vec<usize>> = HashMap::new();
+fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<usize, Vec<usize>> {
+    let mut result: HashMap<usize, Vec<usize>> = HashMap::default();
     for (i, mvar) in unassigned.iter().enumerate() {
         for target in involved(mvar.clone()).iter() {
-            result.entry(target.clone()).or_default().push(i); // TODO missing optimization if it's already at the last.
+            result.entry(target.usize()).or_default().push(i); // TODO missing optimization if it's already at the last.
         }
     }
     result
@@ -88,7 +88,7 @@ pub fn split(unassigned: &[W<Meta>]) -> Vec<Component> {
     for (i, mvar) in unassigned.iter().enumerate() {
         let mut parent = Some(mvar);
         while let Some(p) = parent {
-            if let Some(arr) = involved_inverse.get(p) {
+            if let Some(arr) = involved_inverse.get(&p.usize()) {
                 for o in arr {
                     uf.union(i, *o);
                 }

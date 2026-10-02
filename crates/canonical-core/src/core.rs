@@ -20,10 +20,6 @@ thread_local! {
     static COUNTER: RefCell<u64> = RefCell::new(THREAD_COUNTER.fetch_add(1, Ordering::AcqRel));
 }
 
-pub fn guard_overflow() {
-    if stacker::remaining_stack().unwrap() < 32 * 1024 { panic!("Stack overflow.") }
-}
-
 /// Generates a fresh `u64` to serve as a variable identifier.
 pub fn next_u64() -> u64 {
     COUNTER.with(|c| {
@@ -532,7 +528,7 @@ impl ES {
     pub fn get_many(&self, indices: &Vec<Vec<usize>>) -> Vec<W<Meta>> {
         assert_eq!(self.length(), indices.len(),
             "get_many: ES length does not match the input vector length");
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(indices.iter().map(Vec::len).sum());
         iter::successors(self.linked.clone(), |node|
             node.borrow().tail.clone() // Iterate over the linked list.
         ).enumerate().for_each(|(i, linked)| {
@@ -606,7 +602,6 @@ impl Term {
 
     /// Computes the weak head normal form. 
     pub fn whnf<const RULES: bool, C: Attribution>(&self, owned_linked: &mut Vec<S<Linked>>, attribution: &mut C) -> WHNF {
-        guard_overflow();
         if let Some(assn) = &self.base.borrow().assignment {
             let es = self.es.sub_es(assn.head.0);
 
@@ -647,7 +642,6 @@ impl Term {
 
 impl <'a> WHNF {
     fn pattern_match<C: Attribution>(&self, patterns: &mut Vec<Matcher<'a>>, owned_linked: &mut Vec<S<Linked>>, attribution: &mut C, can_stuck: bool, stuck: &mut Option<W<Meta>>) -> ControlFlow<(Term, &'a Rule)> {
-        guard_overflow();
         match &self.1 {
             Head::Meta(meta) => {
                 patterns.retain_mut(|matcher| 
@@ -664,7 +658,7 @@ impl <'a> WHNF {
                 
                 for i in (0..patterns.len()).rev() {
                     if let Some(symbol) = patterns[i].pattern.next().unwrap() {
-                        let mut matcher = patterns.remove(i);
+                        let mut matcher = patterns.swap_remove(i);
                         if symbol.bind.eq(&var.bind) {
                             ordering = Some(&symbol.children);
                             matcher.replacement.es = matcher.replacement.es.append(Node {
