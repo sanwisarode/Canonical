@@ -63,7 +63,9 @@ pub struct Assignment {
 
     /// True if the codomain of `head` is not stuck on a metavariable, for heuristics.
     pub has_rigid_type: bool,
-    pub var_type: Option<Type>
+    pub var_type: Option<Type>,
+
+    pub involved: Vec<W<Meta>>
 }
 
 /// The core data structure for terms and metavariables, consisting of an `assignment`
@@ -115,11 +117,11 @@ impl Meta {
         let mut new_constraints: Vec<Box<dyn Constraint>> = Vec::new();
         let assn = self.assignment.as_mut().unwrap();
 
-        let premise_type = assn.var_type.clone().unwrap();
-        let goal_type = self.typ.clone().unwrap();
+        let premise_type = assn.var_type.as_ref().unwrap();
+        let goal_type = self.typ.as_ref().unwrap();
 
         // check the type of `self` with the codomain of the `var_type
-        if (!Equation { premise: premise_type.codomain(), goal: goal_type.codomain(), premise_type, goal_type }
+        if (!Equation { premise: premise_type.codomain(), goal: goal_type.codomain(), parent: this.clone() }
             .reduce(&mut new_constraints, &mut assn.changes, &mut assn._owned_linked)) { return None; }
 
         if !assn.bind.borrow().redexes.iter().all(|redex|
@@ -133,6 +135,10 @@ impl Meta {
         if !self.constraints.iter().all(|c|
             c.reduce(&mut new_constraints, &mut assn.changes, &mut assn._owned_linked)
         ) { return None }
+
+        // Calculate involved.
+        assn.involved.extend(goal_type.1.get_many(&goal_type.0.borrow().codomain_mvars));
+        assn.involved.extend(premise_type.1.get_many(&premise_type.0.borrow().codomain_mvars));
 
         return Some(new_constraints);
     }
@@ -190,7 +196,7 @@ pub trait Constraint: std::any::Any {
     /// Whether this constraint enforces an assignment on the stuck metavariable.
     fn rigid(&self) -> bool { false }
 
-    fn involved(&self) -> Vec<W<Meta>>;
+    fn involved(&self, mvars: &mut Vec<W<Meta>>);
 }
 
 /// A definitional (judgmental) equality between two `Term`s.
@@ -201,9 +207,7 @@ pub struct Equation {
     /// `goal` is a subterm of the `codomain` of the `Type` of a metavariable
     pub goal: Term,
 
-
-    pub premise_type: Type,
-    pub goal_type: Type
+    pub parent: W<Meta>
 }
 
 #[derive(Clone)]
@@ -244,8 +248,8 @@ impl Constraint for RedexConstraint {
         }
     }
 
-    fn involved(&self) -> Vec<W<Meta>> {
-        return Vec::new(); // TODO
+    fn involved(&self, _mvars: &mut Vec<W<Meta>>) {
+        return // TODO
     }
 }
 
@@ -272,14 +276,13 @@ impl Constraint for Equation {
                             Equation {
                                 premise: premise.arg(i, Entry::vars(var_id), owned_linked),
                                 goal: goal.arg(i, Entry::vars(var_id), owned_linked), 
-                                premise_type: self.premise_type.clone(),
-                                goal_type: self.goal_type.clone()
+                                parent: self.parent.clone()
                             }.reduce(constraints, changes, owned_linked)
                         )
                     }
                     WHNF(goal, Head::Meta(rhs)) => {
                         // goal is stuck, add an equation associated with goal_meta.
-                        constraints.push(Box::new(Equation { premise, goal, premise_type: self.premise_type.clone(), goal_type: self.goal_type.clone() }));
+                        constraints.push(Box::new(Equation { premise, goal, parent: self.parent.clone() }));
                         changes.push(rhs);
                         true
                     }
@@ -287,7 +290,7 @@ impl Constraint for Equation {
             }
             WHNF(premise, Head::Meta(lhs)) => {
                 // premise is stuck, add an equation associated with premise_meta.
-                constraints.push(Box::new(Equation { premise, goal: self.goal.clone(), premise_type: self.premise_type.clone(), goal_type: self.goal_type.clone() }));
+                constraints.push(Box::new(Equation { premise, goal: self.goal.clone(), parent: self.parent.clone() }));
                 changes.push(lhs);
                 true
             }
@@ -299,10 +302,9 @@ impl Constraint for Equation {
         matches!(self.goal.whnf::<true, ()>(&mut Vec::new(), &mut ()).1, Head::Var(_))
     }
 
-    fn involved(&self) -> Vec<W<Meta>> {
-        let mut x = self.goal_type.1.get_many(&self.goal_type.0.borrow().codomain_mvars);
-        x.extend(self.premise_type.1.get_many(&self.premise_type.0.borrow().codomain_mvars));
-        return x
+    fn involved(&self, mvars: &mut Vec<W<Meta>>) {
+        mvars.extend(self.parent.borrow().assignment
+            .as_ref().unwrap().involved.iter().cloned());
     }
 }
 

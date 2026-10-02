@@ -22,7 +22,7 @@ fn involved(mvar: W<Meta>) -> Vec<(W<Meta>, bool)> {
     let codomain: Vec<(W<Meta>, bool)> = typ.1.get_many(&typ.0.borrow().codomain_mvars).into_iter().map(|x| (x, true)).collect();
     let mut constraints = mvar.borrow().gamma.involved();
     for constraint in &mvar.borrow().constraints {
-        constraints.extend(constraint.involved())
+        constraint.involved(&mut constraints);
     }
     let mut result: Vec<(W<Meta>, bool)> = constraints.into_iter().map(|x| (x, false)).collect();
     result.extend(codomain);

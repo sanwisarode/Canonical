@@ -46,6 +46,7 @@ pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<O
         head, args, bind: var_type.2.clone(), changes: Vec::new(), _owned_linked,
         has_rigid_type: matches!(var_type.codomain().whnf::<true, ()>(&mut Vec::new(), &mut ()).1, Head::Var(_)),
         var_type: Some(var_type.clone()),
+        involved: Vec::new()
     });
 
     let Some(constraints) = meta.clone().borrow_mut().test_assignment(meta.clone()) else {
