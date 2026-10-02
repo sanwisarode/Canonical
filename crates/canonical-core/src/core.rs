@@ -140,8 +140,8 @@ impl Meta {
         ) { return None }
 
         // Calculate involved.
-        assn.involved.extend(goal_type.1.get_many(&goal_type.0.borrow().codomain_mvars));
-        assn.involved.extend(premise_type.1.get_many(&premise_type.0.borrow().codomain_mvars));
+        assn.involved.extend(goal_type.1.get_many(goal_type.0.clone(), |tb| &tb.codomain_mvars));
+        assn.involved.extend(premise_type.1.get_many(premise_type.0.clone(), |tb| &tb.codomain_mvars));
 
         return Some(new_constraints);
     }
@@ -209,7 +209,8 @@ pub trait Constraint: std::any::Any {
     /// Whether this constraint enforces an assignment on the stuck metavariable.
     fn rigid(&self) -> bool { false }
 
-    fn involved(&self, mvars: &mut Vec<W<Meta>>);
+    /// The metavariables whose assignments might interact with this constraint.
+    fn involved(&self) -> Box<dyn Iterator<Item = W<Meta>> + '_>;
 }
 
 /// A definitional (judgmental) equality between two `Term`s.
@@ -261,8 +262,8 @@ impl Constraint for RedexConstraint {
         }
     }
 
-    fn involved(&self, _mvars: &mut Vec<W<Meta>>) {
-        return // TODO
+    fn involved(&self) -> Box<dyn Iterator<Item = W<Meta>> + '_> {
+        Box::new(iter::empty()) // TODO
     }
 }
 
@@ -315,9 +316,9 @@ impl Constraint for Equation {
         matches!(self.goal.whnf::<true, ()>(&mut Vec::new(), &mut ()).1, Head::Var(_))
     }
 
-    fn involved(&self, mvars: &mut Vec<W<Meta>>) {
-        mvars.extend(self.parent.borrow().assignment
-            .as_ref().unwrap().involved.iter().cloned());
+    fn involved(&self) -> Box<dyn Iterator<Item = W<Meta>> + '_> {
+        Box::new(self.parent.borrow().assignment
+            .as_ref().unwrap().involved.iter().cloned())
     }
 }
 
@@ -525,34 +526,25 @@ impl ES {
         ).count()
     }
 
-    pub fn get_many(&self, indices: &Vec<Vec<usize>>) -> Vec<W<Meta>> {
-        assert_eq!(self.length(), indices.len(),
+    pub fn get_many(&self, tb: W<TypeBase>, indices: fn(&TypeBase) -> &Vec<Vec<usize>>) -> impl Iterator<Item = W<Meta>> {
+        assert_eq!(self.length(), indices(tb.borrow()).len(),
             "get_many: ES length does not match the input vector length");
-        let mut result = Vec::with_capacity(indices.iter().map(Vec::len).sum());
         iter::successors(self.linked.clone(), |node|
             node.borrow().tail.clone() // Iterate over the linked list.
-        ).enumerate().for_each(|(i, linked)| {
-            let indices = &indices[i];
-            if !indices.is_empty() {
-                let mvars = &linked.borrow().node.entry.subst.as_ref().expect("not a subst!").0;
-                for j in indices {
-                    result.push(mvars[*j].downgrade());
-                }
-            }
-        });
-        return result
+        ).enumerate().flat_map(move |(i, linked)| {
+            let tb = tb.clone();
+            (0..indices(tb.borrow())[i].len()).map(move |k| {
+                let j = indices(tb.borrow())[i][k];
+                linked.borrow().node.entry.subst.as_ref().expect("not a subst!").0[j].downgrade()
+            })
+        })
     }
 
-    pub fn involved(&self) -> Vec<W<Meta>> {
-        let mut result = Vec::new();
-        iter::successors(self.linked.clone(), |node| 
+    pub fn involved(&self) -> impl Iterator<Item = W<Meta>> {
+        iter::successors(self.linked.clone(), |node|
             node.borrow().tail.clone() // Iterate over the linked list.
-        ).for_each(|linked| {
-            if let Some(typ) = &linked.borrow().node.entry.context {
-                result.extend(typ.1.get_many(&typ.0.borrow().types_mvars).into_iter())
-            }
-        });
-        return result;
+        ).filter_map(|linked| linked.borrow().node.entry.context.clone())
+        .flat_map(|typ| typ.1.get_many(typ.0, |tb| &tb.types_mvars))
     }
 }
 

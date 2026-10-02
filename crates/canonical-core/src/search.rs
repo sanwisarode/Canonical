@@ -1,5 +1,4 @@
 use crate::core::*;
-use crate::heuristic::*;
 use crate::memory::{S, W, WVec};
 use crate::stats::*;
 use std::sync::atomic::AtomicBool;
@@ -72,7 +71,7 @@ pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<O
         }, &mut assignment._owned_linked);
 
         arg.gamma_involved.extend(arg.gamma.involved());
-        arg.typ_involved.extend(typ.1.get_many(&typ.0.borrow().codomain_mvars).into_iter());
+        arg.typ_involved.extend(typ.1.get_many(typ.0.clone(), |tb| &tb.codomain_mvars));
 
         arg.typ = Some(typ);
     }

@@ -221,6 +221,10 @@ impl Prover {
 
     //Selecting component based on margin = fuel - (component.meta_entropy + extra_entropy)
     fn select_frame(&self) -> usize {
+        for (i, frame) in self.frames.iter().enumerate() {
+            if frame.borrow().component.next.has_rigid_equation { return i; }
+        }
+
         let mut best = 0;
         let mut best_margin = f64::INFINITY;
         for (i, frame) in self.frames.iter().enumerate() {
