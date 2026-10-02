@@ -47,19 +47,16 @@ fn entropy(infos: &[MetaInfo]) -> f64 {
     infos.iter().map(|info| info.difficulty()).product()
 }
 
+fn independent(mvar: &W<Meta>) -> bool {
+    mvar.borrow().dependence == 0 && mvar.borrow().parent.as_ref().is_none_or(independent)
+}
+
 // Choose the metavariable to refine next in a component
 fn select_next(component: &[W<Meta>], infos: &[MetaInfo]) -> usize {
     let mut eligible = Vec::with_capacity(component.len());
-    'outer: for (i, mvar) in component.iter().enumerate() {
+    for (i, mvar) in component.iter().enumerate() {
         if infos[i].has_rigid_equation { return i }
-
-        let mut opt_ancestor = &Some(mvar.clone());
-        while let Some(ancestor) = opt_ancestor {
-            if ancestor.borrow().dependence != 0 { continue 'outer; }
-            opt_ancestor = &ancestor.borrow().parent;
-        }
-
-        eligible.push(i);
+        if independent(mvar) { eligible.push(i) };
     }
 
     let mut best = eligible.pop().expect("No eligible mvars!");
