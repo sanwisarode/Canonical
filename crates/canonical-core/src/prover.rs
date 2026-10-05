@@ -243,41 +243,52 @@ impl Prover {
     }
 
     // Moving parallelism branch of dfs to new function
-    // fn parallelize_frame<F>(&mut self, mut frame: Frame, max_size: usize, callback: &F) -> Frame where F: Fn(Term) + Send + Sync {
-    //     let mut provers = Vec::new();
-    //     let mut domain = Vec::new();
-    //     domain.append(&mut frame.domain); // ownership hack
-    //     while let Some(element) = domain.pop() {
-    //         // no need to add components.
-    //         let components = frame.assign(self.frames.len() + 1, element);
-    //         self.components.extend(components);
-    //         self.frames.push(frame);
+    fn parallelize_frame<F>(&mut self, mut frame: W<Frame>, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
+        let mut provers = Vec::new();
+        // let mut domain = Vec::new();
+        // domain.append(&mut frame.domain); // ownership hack
+        while let Some(element) = frame.clone().borrow_mut().domain.pop() {
+            // no need to add components.
+            // let components = frame.assign(self.frames.len() + 1, element);
+            // self.components.extend(components);
+            // self.frames.push(frame);
+            let children = self.assign(frame.clone(), element);
+
+            self.size += 1;
+            let len = self.frames.len();
+            self.frames.extend(children.iter().map(|x| x.downgrade()));
+            frame.borrow_mut().children = Some(children);
+
+            provers.push(self.clone());
+
+            self.size -= 1;
+            self.frames.truncate(len);
+            frame.borrow_mut().children = None;
+
+            // regain ownership
+            // frame = self.frames.pop().unwrap();
+
+
+            frame.borrow_mut().component.next.meta.borrow_mut().unassign();
             
-    //         provers.push(self.clone());
+            // self.components.truncate(frame.truncate);
+        }
 
-    //         // regain ownership
-    //         frame = self.frames.pop().unwrap();
-    //         frame.component.partition.next.meta.borrow_mut().unassign();
-    //         self.components.truncate(frame.truncate);
-    //     }
+        let options = provers.len();
+        NUM_JOBS.fetch_add(options, Ordering::Relaxed);
 
-    //     let options = provers.len();
-    //     NUM_JOBS.fetch_add(options, Ordering::Relaxed);
+        let acc = provers.into_par_iter().map(|mut prover| {
+            prover.dfs(max_size, callback);
+            prover.frame.borrow().stats.clone()
+        }).reduce(SearchInfo::new_branch, |mut a, b| {
+            a.add_branch(&b);
+            a
+        });
 
-    //     let acc = provers.into_par_iter().map(|mut prover| {
-    //         let mut result = SearchInfo::new_branch();
-    //         result.add_branch(&prover.dfs(max_size, callback));
-    //         result
-    //     }).reduce(SearchInfo::new_branch, |mut a, b| {
-    //         a.add_branch(&b);
-    //         a
-    //     });
+        NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
 
-    //     NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
-
-    //     frame.stats.add_branch(&acc);
-    //     frame
-    // }
+        frame.borrow_mut().stats = acc;
+    }
 
 
     //Selecting component based on margin = fuel - (component.meta_entropy + extra_entropy)
@@ -328,6 +339,11 @@ impl Prover {
             let mut frame = self.frames.swap_remove(self.select_frame());
 
             if self.size < max_size {
+                // if self.parallelize(frame.borrow()) {
+                //     self.parallelize_frame(frame.clone(), max_size, callback);
+                //     self.backtrack(self.frame.downgrade());
+                //     return false
+                // } else
                 if let Some(element) = frame.borrow_mut().domain.pop() {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
@@ -369,7 +385,7 @@ impl Prover {
     fn replay(&mut self, mut new_frame: W<Frame>, orig_frame: W<Frame>, map: &mut HashMap<W<Meta>, W<Meta>>) {
         new_frame.borrow_mut().select(map[&orig_frame.borrow().component.next.meta].clone());
   
-        new_frame.borrow_mut().stats = orig_frame.borrow().stats.clone();
+        new_frame.borrow_mut().stats = SearchInfo::new_meta();
         new_frame.borrow_mut().populate(orig_frame.borrow().fuel, orig_frame.borrow().extra_entropy);
 
         // An unassigned frame (children == None) is a frontier leaf: nothing to
