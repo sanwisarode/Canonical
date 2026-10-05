@@ -1,5 +1,5 @@
 // https://github.com/leanprover/lean4/blob/master/src/include/lean/lean.h
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_char};
 use canonical_compat::ir::*;
 use canonical_core::core::*;
 use canonical_core::prover::*;
@@ -120,7 +120,7 @@ fn lean_align(v: usize, a: usize) -> usize {
 fn lean_alloc_small_object(sz: usize) -> *mut LeanObject {
     let sz = lean_align(sz, 8);
     unsafe {
-        let mem = mi_malloc_small(sz);
+        let mem = lean_alloc_object(sz);
         if mem.is_null() {
             lean_internal_panic_out_of_memory();
         }
@@ -179,7 +179,7 @@ fn lean_alloc_ctor(tag: usize, num_objs: usize, scalar_sz: usize) -> *mut LeanCt
     let sz = std::mem::size_of::<LeanCtorObject>() + std::mem::size_of::<*const LeanObject>() * num_objs + scalar_sz;
     let o = lean_alloc_ctor_memory(sz);
     unsafe {
-        (*o).m_header = LeanObject { m_rc: 1, m_cs_sz: 0, m_other: num_objs as u8, m_tag: tag as u8 };
+        (*o).m_header = LeanObject { m_rc: 1, m_cs_sz: lean_align(sz, 8) as u16, m_other: num_objs as u8, m_tag: tag as u8 };
     }
     o
 }
@@ -413,7 +413,6 @@ extern "C" {
     fn lean_alloc_object(sz: usize) -> *const LeanObject;
     // fn lean_alloc_small(sz: usize, slot_idx: usize) -> *const LeanObject;
     // fn lean_io_check_canceled_core() -> bool;
-    fn mi_malloc_small(sz: usize) -> *mut c_void;
     fn lean_internal_panic_out_of_memory();
     fn lean_mk_io_user_error(str: *const LeanStringObject) -> *const LeanObject;
     // fn lean_dbg_trace(s: *const LeanStringObject, f: *const LeanObject);
@@ -570,12 +569,11 @@ pub unsafe extern "C" fn refine(typ: *const LeanType) -> *const LeanResult {
         let prover = Prover::new(tb_ref.downgrade(), problem_bind.downgrade());
 
         let new_state = AppState {
-            current: prover.meta,
+            current: prover,
             undo: Vec::new(),
             redo: Vec::new(),
             autofill: true,
             constraints: false,
-            _owned_linked: Vec::new(),
             _owned_tb: tb_ref,
             _owned_bind: problem_bind
         };
@@ -603,7 +601,8 @@ pub unsafe extern "C" fn get_refinement() -> *const LeanResult {
         match GLOBAL_STATE.get() {
             None => panic!("No refine server running!"),
             Some(state) => {
-                let current = state.lock().unwrap_or_else(|e| e.into_inner()).current.downgrade();
+                let state = state.lock().unwrap_or_else(|e| e.into_inner());
+                let current = state.current.meta.downgrade();
                 let bindings = current.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone();
                 to_lean_term(
                     &IRTerm::from_lambda::<false>(
