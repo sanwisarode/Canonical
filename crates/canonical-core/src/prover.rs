@@ -149,27 +149,27 @@ impl Prover {
     }
 
     /// Search below the current assignments, optionally limited to a subtree.
-    pub fn complete(&mut self, root: W<Meta>, duration: Duration) -> bool {
-        let deadline = Instant::now() + duration;
-        let roots: Vec<_> = self.frames.iter().map(|f| (f.clone(), f.borrow().parent.clone())).collect();
-        for (mut frame, _) in roots.iter().cloned() { frame.borrow_mut().parent = None; }
-        let baseline = self.size;
-        let mut fuel: f64 = 1e4;
-        let mut solved = false;
-        while fuel.is_finite() && Instant::now() < deadline {
-            let entropy: f64 = roots.iter().map(|(f, _)| f.borrow().component.meta_entropy).sum();
-            for (mut frame, _) in roots.iter().cloned() {
-                let extra = entropy - frame.borrow().component.meta_entropy;
-                frame.borrow_mut().populate(fuel, extra);
-            }
-            solved = self.dfs(baseline + (fuel.ln_1p() * 4.0) as usize, &|_| {}, Some((root.clone(), deadline)));
-            if solved { break; }
-            for (frame, _) in roots.iter().rev() { self.backtrack(frame.clone()); }
-            fuel *= 3.0;
-        }
-        for (mut frame, parent) in roots { frame.borrow_mut().parent = parent; }
-        solved
-    }
+    // pub fn complete(&mut self, root: W<Meta>, duration: Duration) -> bool {
+    //     let deadline = Instant::now() + duration;
+    //     let roots: Vec<_> = self.frames.iter().map(|f| (f.clone(), f.borrow().parent.clone())).collect();
+    //     for (mut frame, _) in roots.iter().cloned() { frame.borrow_mut().parent = None; }
+    //     let baseline = self.size;
+    //     let mut fuel: f64 = 1e4;
+    //     let mut solved = false;
+    //     while fuel.is_finite() && Instant::now() < deadline {
+    //         let entropy: f64 = roots.iter().map(|(f, _)| f.borrow().component.meta_entropy).sum();
+    //         for (mut frame, _) in roots.iter().cloned() {
+    //             let extra = entropy - frame.borrow().component.meta_entropy;
+    //             frame.borrow_mut().populate(fuel, extra);
+    //         }
+    //         solved = self.dfs(baseline + (fuel.ln_1p() * 4.0) as usize, &|_| {}, Some((root.clone(), deadline)));
+    //         if solved { break; }
+    //         for (frame, _) in roots.iter().rev() { self.backtrack(frame.clone()); }
+    //         fuel *= 3.0;
+    //     }
+    //     for (mut frame, parent) in roots { frame.borrow_mut().parent = parent; }
+    //     solved
+    // }
 
     /// Gets the current (partial) term of the prover.
     pub fn get_term(&self) -> Term {
@@ -188,7 +188,7 @@ impl Prover {
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             // self.frame.borrow_mut().fuel = depth;
             self.frame.borrow_mut().populate(depth, 0.0);
-            self.dfs(max_size, callback, None);
+            self.dfs(max_size, callback);
 
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
 

@@ -228,7 +228,8 @@ async fn canonical1(State(state): State<Arc<Mutex<AppState>>>, Json(solve1) : Js
 
 /// Run Canonical for up to one second below the existing assignments.
 fn canonical_simple(mut prover: Prover, next_root: W<Meta>) -> Option<Prover> {
-    if prover.complete(next_root, Duration::from_secs(1)) { Some(prover) } else { None }
+    // if prover.complete(next_root, Duration::from_secs(1)) { Some(prover) } else { None }
+    None
 }
 
 /// Find the selected metavariable in the corresponding position of the clone.
