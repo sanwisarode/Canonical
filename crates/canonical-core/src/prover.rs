@@ -211,6 +211,8 @@ impl Prover {
         if let Some(children) = &frame.children {
             for child in children {
                 self.backtrack(child.downgrade());
+                child.downgrade().borrow_mut().component.next.meta.borrow_mut().stats
+                    .add_branch(&child.downgrade().borrow().stats);
 
                 // By our post-condition, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
@@ -226,7 +228,6 @@ impl Prover {
 
             let stats = frame.component.next.meta.borrow_mut().unassign();
             frame.stats.add_branch(&stats);
-            frame.component.next.meta.borrow_mut().stats.add_branch(&frame.stats);
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
