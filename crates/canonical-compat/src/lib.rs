@@ -8,6 +8,8 @@ pub mod ab;
 use ir::*;
 use std::time::SystemTime;
 use canonical_core::stats::STEP_COUNT;
+use canonical_core::search::EXPERIMENT;
+use std::sync::atomic::Ordering;
 use canonical_core::prover::Prover;
 
 /// Manually construct a IRTerm body.
@@ -131,15 +133,15 @@ macro_rules! P {
 
 // Entrypoint for CLI: A/B test the `EXPERIMENT` flag on random examples from `Results/`.
 // Usage: `canonical-compat [count] [seed]` (defaults: 30 examples, time-based seed).
-// #[tokio::main]
-// pub async fn main() {
-//     let count = std::env::args().nth(1).and_then(|arg| arg.parse().ok()).unwrap_or(30);
-//     let seed = std::env::args().nth(2).and_then(|arg| arg.parse().ok());
-//     ab::ab_test(count, seed, |enabled| EXPERIMENT.store(enabled, Ordering::Release));
-// }
-
 #[tokio::main]
 pub async fn main() {
+    let count = std::env::args().nth(1).and_then(|arg| arg.parse().ok()).unwrap_or(30);
+    let seed = std::env::args().nth(2).and_then(|arg| arg.parse().ok());
+    ab::ab_test(count, seed, |enabled| EXPERIMENT.store(enabled, Ordering::Release));
+}
+
+#[allow(dead_code)]
+async fn debug_main() {
     let irt = IRType::load("lean/debug.json".to_string());
     let tb = S::new(irt.to_type(&ES::new(), Polarity::Goal).0);
     let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));

@@ -1,6 +1,8 @@
 use crate::core::*;
 use crate::memory::*;
 use crate::stats::MetaInfo;
+use crate::search::EXPERIMENT;
+use std::sync::atomic::Ordering;
 use rustc_hash::FxHashMap as HashMap;
 use union_find::{UnionFind, UnionBySize, QuickUnionUf};
 
@@ -81,8 +83,13 @@ fn to_component(component: &Vec<W<Meta>>) -> Component {
     Component { next, unassigned, meta_entropy }
 }
 
-/// Union metavariables whose assignments interact
+/// Union metavariables whose assignments interact.
+/// With `EXPERIMENT` off, skip independence analysis and keep everything in one component.
 pub fn split(unassigned: &[W<Meta>]) -> Vec<Component> {
+    if !EXPERIMENT.load(Ordering::Acquire) {
+        if unassigned.is_empty() { return Vec::new() }
+        return vec![to_component(&unassigned.to_vec())];
+    }
     let involved_inverse = involved_inverse(unassigned);
     let mut uf = QuickUnionUf::<UnionBySize>::new(unassigned.len());
     for (i, mvar) in unassigned.iter().enumerate() {

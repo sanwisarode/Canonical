@@ -1,4 +1,7 @@
-use crate::ai::Example;
+use crate::ir::IRType;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::fs::File;
 use canonical_core::core::*;
 use canonical_core::memory::S;
 use canonical_core::prover::Prover;
@@ -7,11 +10,25 @@ use canonical_core::stats::{LIMIT, STEP_COUNT};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The step limit shared by both runs of each example.
 const STEP_LIMIT: u32 = 10_000_000;
+
+/// The format of the examples in `Results/` (from CanonicalData.tar).
+#[derive(Deserialize)]
+struct Example {
+    problem: IRType,
+    #[allow(dead_code)]
+    unifications: HashMap<String, HashMap<String, u32>>,
+}
+
+impl Example {
+    fn load(path: &str) -> Example {
+        rmp_serde::decode::from_read(File::open(path).unwrap()).unwrap()
+    }
+}
 
 /// A/B test `configure(false)` against `configure(true)` on `n` random examples from `Results/`.
 /// Pass the same `seed` to rerun on the same set of examples.
@@ -30,28 +47,31 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
     for path in &files {
         let name = path.file_stem().unwrap().to_str().unwrap();
         let results = panic::catch_unwind(AssertUnwindSafe(|| {
-            let problem = Example::load(path.to_str().unwrap().to_string()).problem;
+            let problem = Example::load(path.to_str().unwrap()).problem;
             let tb = S::new(problem.to_type(&ES::new(), Polarity::Goal).0);
             let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));
             [false, true].map(|enabled| {
                 configure(enabled);
                 let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
-                prover.prove(&|_| RUN.store(false, Ordering::Relaxed), false).0
+                let solved = AtomicBool::new(false);
+                let steps = prover.prove(&|_| {
+                    solved.store(true, Ordering::Relaxed);
+                    RUN.store(false, Ordering::Relaxed);
+                }, false).0.steps;
+                (steps, solved.into_inner())
             })
         }));
-        let Ok([a, b]) = results else {
+        let Ok([(a_steps, a_solved), (b_steps, b_solved)]) = results else {
             println!("{name}, error, , , ");
             continue;
         };
 
-        let a_solved = a.solution_count > 0;
-        let b_solved = b.solution_count > 0;
-        println!("{name}, {}, {}, {}, {}", a.steps, a_solved, b.steps, b_solved);
+        println!("{name}, {a_steps}, {a_solved}, {b_steps}, {b_solved}");
         solved[0] += a_solved as u32;
         solved[1] += b_solved as u32;
         if a_solved && b_solved {
             both_solved += 1;
-            log_ratio_sum += (a.steps.max(1) as f64 / b.steps.max(1) as f64).ln();
+            log_ratio_sum += (a_steps.max(1) as f64 / b_steps.max(1) as f64).ln();
         }
     }
 

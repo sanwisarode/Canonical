@@ -221,6 +221,11 @@ impl Prover {
 
     //Selecting component based on margin = fuel - (component.meta_entropy + extra_entropy)
     fn select_frame(&self) -> usize {
+        for (i, frame) in self.frames.iter().enumerate() {
+            if frame.borrow().component.next.has_rigid_equation {
+                return i;
+            }
+        }
         let mut best = 0;
         let mut best_margin = f64::INFINITY;
         for (i, frame) in self.frames.iter().enumerate() {
@@ -236,7 +241,10 @@ impl Prover {
 
     fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
-            STEP_COUNT.fetch_add(1, Ordering::Relaxed);
+            if STEP_COUNT.fetch_add(1, Ordering::Relaxed) >= LIMIT.load(Ordering::Relaxed) {
+                RUN.store(false, Ordering::Relaxed);
+                break
+            }
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
             if self.frames.is_empty() { callback(self.get_term()); return }
             let mut frame = self.frames.swap_remove(self.select_frame());
