@@ -299,32 +299,33 @@ impl Prover {
         best
     }
 
-    fn dfs<F>(&mut self, max_size: usize, callback: &F, refinement: Option<(W<Meta>, Instant)>) -> bool where F: Fn(Term) + Send + Sync {
-        while refinement.as_ref().map_or_else(|| RUN.load(Ordering::Relaxed), |(_, end)| Instant::now() < *end) {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F/*, refinement: Option<(W<Meta>, Instant)> */) -> bool where F: Fn(Term) + Send + Sync {
+        // while refinement.as_ref().map_or_else(|| RUN.load(Ordering::Relaxed), |(_, end)| Instant::now() < *end) {
+        while RUN.load(Ordering::Relaxed) {
             if STEP_COUNT.fetch_add(1, Ordering::Relaxed) >= LIMIT.load(Ordering::Relaxed) {
                 RUN.store(false, Ordering::Relaxed);
                 break
             }
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
             if self.frames.is_empty() { callback(self.get_term()); return true }
-            let mut i = self.select_frame();
-            if let Some((root, _)) = &refinement {
-                let mut unassigned = Vec::new();
-                collect_unassigned(root.clone(), &mut unassigned);
-                if unassigned.is_empty() { callback(self.get_term()); return true; }
-                if !unassigned.contains(&self.frames[i].borrow().component.next.meta) {
-                    if let Some(j) = self.frames.iter().position(|f| unassigned.contains(&f.borrow().component.next.meta)) {
-                        i = j;
-                    } else {
-                        let meta = unassigned.remove(0);
-                        i = self.frames.iter().position(|f| f.borrow().contains(&meta)).unwrap();
-                        let frame = self.frames[i].borrow_mut();
-                        frame.select(meta);
-                        frame.populate(frame.fuel, frame.extra_entropy);
-                    }
-                }
-            }
-            let mut frame = self.frames.swap_remove(i);
+            // let mut i = self.select_frame();
+            // if let Some((root, _)) = &refinement {
+            //     let mut unassigned = Vec::new();
+            //     collect_unassigned(root.clone(), &mut unassigned);
+            //     if unassigned.is_empty() { callback(self.get_term()); return true; }
+            //     if !unassigned.contains(&self.frames[i].borrow().component.next.meta) {
+            //         if let Some(j) = self.frames.iter().position(|f| unassigned.contains(&f.borrow().component.next.meta)) {
+            //             i = j;
+            //         } else {
+            //             let meta = unassigned.remove(0);
+            //             i = self.frames.iter().position(|f| f.borrow().contains(&meta)).unwrap();
+            //             let frame = self.frames[i].borrow_mut();
+            //             frame.select(meta);
+            //             frame.populate(frame.fuel, frame.extra_entropy);
+            //         }
+            //     }
+            // }
+            let mut frame = self.frames.swap_remove(self.select_frame());
 
             if self.size < max_size {
                 if let Some(element) = frame.borrow_mut().domain.pop() {
@@ -354,7 +355,8 @@ impl Prover {
             }
         }
         // Ordinary proof search keeps its original cancellation cleanup.
-        if refinement.is_none() { self.backtrack(self.frame.downgrade()); }
+        // if refinement.is_none() { self.backtrack(self.frame.downgrade()); }
+        self.backtrack(self.frame.downgrade());
         false
     }
 }
