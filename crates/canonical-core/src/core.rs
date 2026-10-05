@@ -166,8 +166,8 @@ impl Meta {
     }
 
     /// Unassign the metavariable, returning constraints to their pre-assignment state.
-    pub fn unassign(&mut self) {
-        let mut result = SearchInfo::new_arg();
+    pub fn unassign(&mut self) -> SearchInfo {
+        let mut result = SearchInfo::new_meta();
         for meta in self.assignment.as_mut().unwrap().changes.iter_mut() {
             meta.borrow_mut().constraints.pop().unwrap();
         }
@@ -177,7 +177,7 @@ impl Meta {
             arg.borrow().codomain_dependence::<false>();
         }
         self.assignment = None;
-        self.stats.add_branch(&result);
+        result
     }
 
     pub fn pop_recursive(&mut self) {

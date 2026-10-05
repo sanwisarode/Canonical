@@ -39,7 +39,7 @@ pub struct Prover {
 
 impl Frame {
     fn new(component: Component, parent: Option<W<Frame>>) -> Self {
-        Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_branch(), children: None }
+        Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_meta(), children: None }
     }
 
     fn contains(&self, meta: &W<Meta>) -> bool {
@@ -224,7 +224,9 @@ impl Prover {
                 }
             }
 
-            frame.component.next.meta.borrow_mut().unassign();
+            let stats = frame.component.next.meta.borrow_mut().unassign();
+            frame.stats.add_branch(&stats);
+            frame.component.next.meta.borrow_mut().stats.add_branch(&frame.stats);
             frame.children = None;
             self.frames.push(parent);
             self.size -= 1;
@@ -327,7 +329,8 @@ impl Prover {
                 if let Some(element) = frame.borrow_mut().domain.pop() {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
-                        frame.borrow_mut().component.next.meta.borrow_mut().unassign();
+                        let stats = frame.borrow_mut().component.next.meta.borrow_mut().unassign();
+                        frame.borrow_mut().stats.add_branch(&stats);
                         frame.borrow_mut().component.next.meta.borrow_mut().stats.unknown = true;
                         self.frames.push(frame);
                     } else {

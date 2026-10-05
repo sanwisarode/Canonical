@@ -99,7 +99,7 @@ impl SearchInfo {
         SearchInfo { steps: 0.0, completed: false, unknown: false }
     }
 
-    pub fn new_arg() -> Self {
+    pub fn new_meta() -> Self {
         SearchInfo { steps: 1.0, completed: true, unknown: false }
     }
 
