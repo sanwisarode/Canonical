@@ -6,7 +6,9 @@ use crate::compiler::compile;
 use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
-use crate::independence::{split, Component};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+use crate::independence::{collect_unassigned, split, Component};
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -40,6 +42,17 @@ impl Frame {
         Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_branch(), children: None }
     }
 
+    fn contains(&self, meta: &W<Meta>) -> bool {
+        self.component.next.meta == *meta || self.component.unassigned.contains(meta)
+    }
+
+    fn select(&mut self, meta: W<Meta>) {
+        if self.component.next.meta == meta { return; }
+        let i = self.component.unassigned.iter().position(|m| *m == meta).unwrap();
+        self.component.unassigned[i] = self.component.next.meta.clone();
+        self.component.next = MetaInfo::new(meta);
+    }
+
     fn populate(&mut self, fuel: f64, extra_entropy: f64) {
         self.component.next.meta.borrow_mut().had_rigid_equation = self.component.next.has_rigid_equation;
         let mut domain = Vec::new();
@@ -67,6 +80,13 @@ impl Frame {
 impl Prover {
     /// Creates a new Prover for the specified `Type`.
     pub fn new(tb_ref: W<TypeBase>, problem_bind: W<Bind>) -> Self {
+        let prover = Self::fresh(tb_ref.clone(), problem_bind.clone());
+        compile(Type(tb_ref, ES::new(), problem_bind));
+        prover
+    }
+
+    // Clones need their own root context, but can reuse the compiled problem.
+    fn fresh(tb_ref: W<TypeBase>, problem_bind: W<Bind>) -> Self {
         let entry = &tb_ref.borrow().codomain.borrow().gamma.linked.as_ref().unwrap().borrow().node.entry;
         let node = Node {
             entry: Entry { params_id: entry.params_id, lets_id: entry.lets_id, subst: None,
@@ -75,7 +95,6 @@ impl Prover {
         };
         let mut owned_linked = Vec::new();
         let es = ES::new().append(node, &mut owned_linked);
-        compile(Type(tb_ref.clone(), ES::new(), problem_bind.clone()));
         let ty = Type(tb_ref.clone(), es, problem_bind.clone());
         let meta = S::new(Meta::new(ty));
 
@@ -113,6 +132,45 @@ impl Prover {
         return children;
     }
 
+    /// Apply a user choice while keeping the frame tree consistent.
+    pub fn refine(&mut self, meta: W<Meta>, head: DeBruijnIndex) -> bool {
+        let Some(i) = self.frames.iter().position(|f| f.borrow().contains(&meta)) else { return false; };
+        let mut frame = self.frames[i].clone();
+        frame.borrow_mut().select(meta);
+        frame.borrow_mut().populate(1e4, 0.0);
+        let Some(j) = frame.borrow().domain.iter().position(|e| e.0.head.0.0 == head.0.0 && e.0.head.1 == head.1) else { return false; };
+        let element = frame.borrow_mut().domain.remove(j);
+        let children = self.assign(frame.clone(), element);
+        self.frames.swap_remove(i);
+        self.frames.extend(children.iter().map(|f| f.downgrade()));
+        frame.borrow_mut().children = Some(children);
+        self.size += 1;
+        true
+    }
+
+    /// Search below the current assignments, optionally limited to a subtree.
+    pub fn complete(&mut self, root: W<Meta>, duration: Duration) -> bool {
+        let deadline = Instant::now() + duration;
+        let roots: Vec<_> = self.frames.iter().map(|f| (f.clone(), f.borrow().parent.clone())).collect();
+        for (mut frame, _) in roots.iter().cloned() { frame.borrow_mut().parent = None; }
+        let baseline = self.size;
+        let mut fuel: f64 = 1e4;
+        let mut solved = false;
+        while fuel.is_finite() && Instant::now() < deadline {
+            let entropy: f64 = roots.iter().map(|(f, _)| f.borrow().component.meta_entropy).sum();
+            for (mut frame, _) in roots.iter().cloned() {
+                let extra = entropy - frame.borrow().component.meta_entropy;
+                frame.borrow_mut().populate(fuel, extra);
+            }
+            solved = self.dfs(baseline + (fuel.ln_1p() * 4.0) as usize, &|_| {}, Some((root.clone(), deadline)));
+            if solved { break; }
+            for (frame, _) in roots.iter().rev() { self.backtrack(frame.clone()); }
+            fuel *= 3.0;
+        }
+        for (mut frame, parent) in roots { frame.borrow_mut().parent = parent; }
+        solved
+    }
+
     /// Gets the current (partial) term of the prover.
     pub fn get_term(&self) -> Term {
         Term { base: self.meta.downgrade(), es: self.meta.borrow().gamma.clone() }
@@ -130,7 +188,7 @@ impl Prover {
             if verbose { println!("entropy (log): {}", (depth as f32).ln_1p()); }
             // self.frame.borrow_mut().fuel = depth;
             self.frame.borrow_mut().populate(depth, 0.0);
-            self.dfs(max_size, callback);
+            self.dfs(max_size, callback, None);
 
             // if verbose { println!("ratio: {}", result.steps as f32 / previous_steps as f32); }
 
@@ -222,10 +280,9 @@ impl Prover {
     //Selecting component based on margin = fuel - (component.meta_entropy + extra_entropy)
     fn select_frame(&self) -> usize {
         for (i, frame) in self.frames.iter().enumerate() {
-            if frame.borrow().component.next.has_rigid_equation {
-                return i;
-            }
+            if frame.borrow().component.next.has_rigid_equation { return i; }
         }
+
         let mut best = 0;
         let mut best_margin = f64::INFINITY;
         for (i, frame) in self.frames.iter().enumerate() {
@@ -239,15 +296,32 @@ impl Prover {
         best
     }
 
-    fn dfs<F>(&mut self, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
-        while RUN.load(Ordering::Relaxed) {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F, refinement: Option<(W<Meta>, Instant)>) -> bool where F: Fn(Term) + Send + Sync {
+        while refinement.as_ref().map_or_else(|| RUN.load(Ordering::Relaxed), |(_, end)| Instant::now() < *end) {
             if STEP_COUNT.fetch_add(1, Ordering::Relaxed) >= LIMIT.load(Ordering::Relaxed) {
                 RUN.store(false, Ordering::Relaxed);
                 break
             }
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
-            if self.frames.is_empty() { callback(self.get_term()); return }
-            let mut frame = self.frames.swap_remove(self.select_frame());
+            if self.frames.is_empty() { callback(self.get_term()); return true }
+            let mut i = self.select_frame();
+            if let Some((root, _)) = &refinement {
+                let mut unassigned = Vec::new();
+                collect_unassigned(root.clone(), &mut unassigned);
+                if unassigned.is_empty() { callback(self.get_term()); return true; }
+                if !unassigned.contains(&self.frames[i].borrow().component.next.meta) {
+                    if let Some(j) = self.frames.iter().position(|f| unassigned.contains(&f.borrow().component.next.meta)) {
+                        i = j;
+                    } else {
+                        let meta = unassigned.remove(0);
+                        i = self.frames.iter().position(|f| f.borrow().contains(&meta)).unwrap();
+                        let frame = self.frames[i].borrow_mut();
+                        frame.select(meta);
+                        frame.populate(frame.fuel, frame.extra_entropy);
+                    }
+                }
+            }
+            let mut frame = self.frames.swap_remove(i);
 
             if self.size < max_size {
                 if let Some(element) = frame.borrow_mut().domain.pop() {
@@ -272,10 +346,12 @@ impl Prover {
                 self.backtrack(parent);
             } else {
                 self.frames.push(frame); // last iteration adds the frame back.
-                return
+                return false
             }
         }
-        self.backtrack(self.frame.downgrade());
+        // Ordinary proof search keeps its original cancellation cleanup.
+        if refinement.is_none() { self.backtrack(self.frame.downgrade()); }
+        false
     }
 }
 
@@ -284,14 +360,14 @@ unsafe impl Sync for Prover {}
 
 
 impl Prover {
-    fn replay(&mut self, mut new_frame: W<Frame>, orig_frame: W<Frame>) {
+    fn replay(&mut self, mut new_frame: W<Frame>, orig_frame: W<Frame>, map: &mut HashMap<W<Meta>, W<Meta>>) {
+        new_frame.borrow_mut().select(map[&orig_frame.borrow().component.next.meta].clone());
   
         new_frame.borrow_mut().stats = orig_frame.borrow().stats.clone();
-        new_frame.borrow_mut().fuel = orig_frame.borrow().fuel;
-        new_frame.borrow_mut().extra_entropy = orig_frame.borrow().extra_entropy;
+        new_frame.borrow_mut().populate(orig_frame.borrow().fuel, orig_frame.borrow().extra_entropy);
 
         // An unassigned frame (children == None) is a frontier leaf: nothing to
-        // replay. Its fresh domain was already computed by Frame::new.
+        // replay. Its fresh domain was computed above.
         if orig_frame.borrow().children.is_none() {
             self.frames.push(new_frame);
             return
@@ -303,53 +379,37 @@ impl Prover {
         let meta = new_frame.borrow().component.next.meta.clone();
         let linked = meta.borrow().gamma.sub_es(db.0).linked.unwrap();
         let element = test(db, linked, meta.clone()).unwrap().unwrap();
+        for (old, new) in orig_frame.borrow().component.next.meta.borrow().assignment.as_ref().unwrap().args.iter().zip(&element.0.args) {
+            map.insert(old.downgrade(), new.downgrade());
+        }
 
         // Replay the assignment: creates the fresh child frames (with fresh child
         // metas as the assignment's args) and wires their parent pointers to new_frame
         let children = self.assign(new_frame.clone(), element);
-        self.frames.extend(children.iter().map(|x| x.downgrade()));
         new_frame.borrow_mut().children = Some(children);
         
         self.size += 1;
 
-        // Recurse into each child, matching original --> clone by index.
+        // Match child components by metavariable; user selections can change their order.
         let n = orig_frame.borrow().children.as_ref().unwrap().len();
         for i in 0..n {
-            let new_child = new_frame.borrow().children.as_ref().unwrap()[i].downgrade();
             let orig_child = orig_frame.borrow().children.as_ref().unwrap()[i].downgrade();
-            self.replay(new_child, orig_child);
+            let selected = &map[&orig_child.borrow().component.next.meta];
+            let new_child = new_frame.borrow().children.as_ref().unwrap().iter()
+                .find(|f| f.borrow().contains(selected)).unwrap().downgrade();
+            self.replay(new_child, orig_child, map);
         }
     }
 }
 
 impl Clone for Prover {
     fn clone(&self) -> Self {
-        let meta = S::new(Meta::new(self.meta.borrow().typ.as_ref().unwrap().clone()));
-
-        // Fresh, unassigned root frame mirroring the original's root component.
-        let mut frame = S::new(Frame::new(
-            Component {
-                unassigned: Vec::new(),
-                next: MetaInfo::new(meta.downgrade()),
-                meta_entropy: 0.0,
-            }, None
-        ));
-        frame.borrow_mut().populate(self.frame.borrow().fuel, self.frame.borrow().extra_entropy);
-
-        // TODO: Set the parents of the children frames to None so the parallel
-        // runs can't backtrack behind this (replaces the floor behavior).
-        let mut prover = Prover {
-            frames: Vec::new(),
-            size: 0,
-            frame,
-            meta,
-            tb_ref: self.tb_ref.clone(),
-            problem_bind: self.problem_bind.clone(),
-            _owned_linked: Vec::new(),
-        };
+        let mut prover = Self::fresh(self.tb_ref.clone(), self.problem_bind.clone());
+        prover.frames.clear();
+        let mut map = HashMap::from([(self.meta.downgrade(), prover.meta.downgrade())]);
 
         // Rebuild the tree onto fresh memory.
-        prover.replay(prover.frame.downgrade(), self.frame.downgrade());
+        prover.replay(prover.frame.downgrade(), self.frame.downgrade(), &mut map);
 
         prover
     }

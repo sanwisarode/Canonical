@@ -14,13 +14,10 @@ pub struct Component {
 }
 
 // The metavariables whose assignments might interact with mvar
-fn involved(mvar: W<Meta>) -> Vec<W<Meta>> {
-    let mut result = mvar.borrow().gamma_involved.clone();
-    result.extend(mvar.borrow().typ_involved.iter().cloned());
-    for constraint in &mvar.borrow().constraints {
-        constraint.involved(&mut result);
-    }
-    return result;
+fn involved(mvar: &W<Meta>) -> impl Iterator<Item = W<Meta>> + '_ {
+    let meta = mvar.borrow();
+    meta.gamma_involved.iter().chain(&meta.typ_involved).cloned()
+        .chain(meta.constraints.iter().flat_map(|constraint| constraint.involved()))
 }
 
 // Collect the unassigned metavariables in the subtree
@@ -38,7 +35,7 @@ pub fn collect_unassigned(meta: W<Meta>, out: &mut Vec<W<Meta>>) {
 fn involved_inverse(unassigned: &[W<Meta>]) -> HashMap<usize, Vec<usize>> {
     let mut result: HashMap<usize, Vec<usize>> = HashMap::default();
     for (i, mvar) in unassigned.iter().enumerate() {
-        for target in involved(mvar.clone()).iter() {
+        for target in involved(mvar) {
             result.entry(target.usize()).or_default().push(i); // TODO missing optimization if it's already at the last.
         }
     }

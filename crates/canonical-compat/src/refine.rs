@@ -12,10 +12,7 @@ use canonical_core::search::*;
 use canonical_core::independence::split;
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::atomic::Ordering;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::thread;
 use std::time::Duration;
 use std::mem;
 use canonical_core::independence::collect_unassigned;
@@ -57,18 +54,17 @@ pub async fn start_server(state: AppState) {
 
 /// Internal state for the Axum webserver.
 pub struct AppState {
-    /// The term currently being displayed.
-    pub current: S<Meta>,
+    /// The prover for the term currently being displayed.
+    pub current: Prover,
     /// The undo stack.
-    pub undo: Vec<S<Meta>>,
+    pub undo: Vec<Prover>,
     /// The redo stack.
-    pub redo: Vec<S<Meta>>,
+    pub redo: Vec<Prover>,
     /// Whether to automatically make forced moves. 
     pub autofill: bool,
     pub constraints: bool,
 
     // For ownership purposes.
-    pub _owned_linked: Vec<S<Linked>>,
     pub _owned_tb: S<TypeBase>,
     pub _owned_bind: S<Bind>
 }
@@ -98,36 +94,32 @@ async fn index() -> impl IntoResponse {
 
 /// Get the current term as HTML, and next metavariable.
 async fn term(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Value> {
-    // let state = lock(&state);
-    // let meta = state.current.downgrade();
-    // let mut owned_linked = Vec::new();
-    // let term = IRSpine::from_body::<false>(Term { base: meta.clone(), es: meta.borrow().gamma.clone() }.whnf::<false, ()>(&mut owned_linked, &mut ()), true);
-    // let html = term.to_string();
+    let state = lock(&state);
+    let meta = state.current.meta.downgrade();
+    let mut owned_linked = Vec::new();
+    let term = IRSpine::from_body::<false>(Term { base: meta.clone(), es: meta.borrow().gamma.clone() }.whnf::<false, ()>(&mut owned_linked, &mut ()), true);
+    let html = term.to_string();
 
-    // let mut unassigned = Vec::new();
-    // collect_unassigned(state.current.downgrade(), &mut unassigned);
-    // let components = split(unassigned);
-    // let components : Vec<Vec<String>> = components.iter().map(|c|
-    //     std::iter::once(&c.next.meta).chain(c.unassigned.iter()).map(|m|
-    //         m.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
-    //     ).collect()
-    // ).collect();
-    // let html = format!("{}\n\n{:?}", html, components);
+    let mut unassigned = Vec::new();
+    collect_unassigned(state.current.meta.downgrade(), &mut unassigned);
+    let components = split(&unassigned);
+    let next = components.first()
+        .map(|c| c.next.meta.borrow() as *const Meta as usize);
+    let components : Vec<Vec<String>> = components.iter().map(|c|
+        std::iter::once(&c.next.meta).chain(c.unassigned.iter()).map(|m|
+            m.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
+        ).collect()
+    ).collect();
+    let html = format!("{}\n\n{:?}", html, components);
 
-
-    // let next = Meta::next(meta)
-    //     .next
-    //     .map(|m| m.meta.borrow() as *const Meta as usize);
-
-    // return Json(json!({
-    //     "html": html,
-    //     "next": next,
-    //     "undo": !state.undo.is_empty(),
-    //     "redo": !state.redo.is_empty(),
-    //     "autofill": state.autofill,
-    //     "constraints": state.constraints
-    // }));
-    return Json(json!({}));
+    return Json(json!({
+        "html": html,
+        "next": next,
+        "undo": !state.undo.is_empty(),
+        "redo": !state.redo.is_empty(),
+        "autofill": state.autofill,
+        "constraints": state.constraints
+    }));
 }
 
 /// Perform the assignment on the prover in the state. 
@@ -135,52 +127,43 @@ async fn assign(
     State(state): State<Arc<Mutex<AppState>>>,
     Json(assign): Json<Assign>,
 ) -> Json<serde_json::Value> {
-    // let mut state = lock(&state);
+    let mut state = lock(&state);
 
-    // let index = if assign.def {
-    //     Index::Let(assign.index)
-    // } else {
-    //     Index::Param(assign.index)
-    // };
-    // let mut db = DeBruijnIndex(DeBruijn(assign.debruijn), index);
+    let index = if assign.def {
+        Index::Let(assign.index)
+    } else {
+        Index::Param(assign.index)
+    };
+    let mut db = DeBruijnIndex(DeBruijn(assign.debruijn), index);
 
-    // let current = state.current.downgrade();
-    // let (new, map) = Meta::try_clone(current.clone()).unwrap();
+    let current = state.current.meta.downgrade();
+    let mut new = state.current.clone();
+    let mut meta = find_with_id(current, new.meta.downgrade(), assign.meta_id).unwrap();
 
-    // let mut meta = map.get(&find_with_id(
-    //     current,
-    //     assign.meta_id,
-    // )
-    // .unwrap()).unwrap().clone();
+    let mut i = 0;
 
-    // let mut i = 0;
+    while i < AUTOFILL_LIMIT {
+        if !new.refine(meta, db) {
+            break;
+        }
 
-    // while i < AUTOFILL_LIMIT {
-    //     let Some(Some((assn, constraints, _))) = test(
-    //         db,
-    //         meta.borrow().gamma.sub_es(db.0).linked.unwrap(),
-    //         meta.clone()
-    //     ) else { break; };
-
-    //     meta.borrow_mut().assign(assn, constraints);
-
-    //     if !state.autofill {
-    //         break;
-    //     }
+        if !state.autofill {
+            break;
+        }
         
-    //     if let Some((found, found_db)) = find_autofill(new.downgrade()) {
-    //         meta = found;
-    //         db = found_db;
-    //     } else {
-    //         break;
-    //     }
+        if let Some((found, found_db)) = find_autofill(new.meta.downgrade()) {
+            meta = found;
+            db = found_db;
+        } else {
+            break;
+        }
 
-    //     i += 1;
-    // }
+        i += 1;
+    }
 
-    // let prev = mem::replace(&mut state.current, new);
-    // state.redo.clear();
-    // state.undo.push(prev);
+    let prev = mem::replace(&mut state.current, new);
+    state.redo.clear();
+    state.undo.push(prev);
 
     Json(json!({}))
 }
@@ -212,72 +195,55 @@ async fn reset(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Va
     let mut state = lock(&state);
     state.undo = Vec::new();
     state.redo = Vec::new();
-    state.current.borrow_mut().assignment = None;
+    state.current = Prover::new(state._owned_tb.downgrade(), state._owned_bind.downgrade());
     Json(json!({}))
 }
 
 /// Attempt to complete the proof with Canonical.
 async fn canonical(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Value> {
-    // let mut state = lock(&state);
-    // let meta = Meta::try_clone(state.current.downgrade()).unwrap().0;
-    // let prover = Prover { next_root: meta.downgrade(), meta };
-
-    // if let Some(term) = canonical_simple(prover) {
-    //     let prev = mem::replace(&mut state.current, term);
-    //     state.redo.clear();
-    //     state.undo.push(prev);
-    // }
+    let mut state = lock(&state);
+    let prover = state.current.clone();
+    let next_root = prover.meta.downgrade();
+    if let Some(term) = canonical_simple(prover, next_root) {
+        let prev = mem::replace(&mut state.current, term);
+        state.redo.clear();
+        state.undo.push(prev);
+    }
     Json(json!({}))
 }
 
 /// Attempt to complete only the specified subtree with Canonical.
 async fn canonical1(State(state): State<Arc<Mutex<AppState>>>, Json(solve1) : Json<Solve1>) -> Json<serde_json::Value> {
-    // let mut state = lock(&state);
-    // let current = state.current.downgrade();
-    // let (meta, map) = Meta::try_clone(current.clone()).unwrap();
-    // let next_root = map.get(&find_with_id(current, solve1.meta_id).unwrap()).unwrap().clone();
-
-    // let prover = Prover { next_root, meta };
-    // if let Some(term) = canonical_simple(prover) {
-    //     let prev = mem::replace(&mut state.current, term);
-    //     state.redo.clear();
-    //     state.undo.push(prev);
-    // }
+    let mut state = lock(&state);
+    let current = state.current.meta.downgrade();
+    let prover = state.current.clone();
+    let next_root = find_with_id(current, prover.meta.downgrade(), solve1.meta_id).unwrap();
+    if let Some(term) = canonical_simple(prover, next_root) {
+        let prev = mem::replace(&mut state.current, term);
+        state.redo.clear();
+        state.undo.push(prev);
+    }
     Json(json!({}))
 }
 
-/// Run Canonical for 1 second on `prover`, returning the term if one is found.
-fn canonical_simple(prover: Prover) -> Option<S<Meta>> {
-    // let (tx, rx) = mpsc::channel();
-
-    // thread::spawn(move || {
-    //     prover.prove(&|value| {
-    //         if let Some(cloned) = Meta::try_clone(value.base) {
-    //             let _ = tx.send(Some(cloned.0));
-    //         } 
-    //     }, false);
-    //     tx.send(None)
-    // });
-
-    // let term = rx.recv_timeout(Duration::from_secs(1));
-    // RUN.store(false, Ordering::Relaxed);
-    // term.ok().flatten()
-    None
+/// Run Canonical for up to one second below the existing assignments.
+fn canonical_simple(mut prover: Prover, next_root: W<Meta>) -> Option<Prover> {
+    if prover.complete(next_root, Duration::from_secs(1)) { Some(prover) } else { None }
 }
 
-/// Find a metavariable with the given hashcode in the children of `meta`.
-fn find_with_id(meta: W<Meta>, id: usize) -> Option<W<Meta>> {
+/// Find the selected metavariable in the corresponding position of the clone.
+fn find_with_id(meta: W<Meta>, copy: W<Meta>, id: usize) -> Option<W<Meta>> {
     match &meta.borrow().assignment {
         None => {
             if (meta.borrow() as *const Meta as usize) == id {
-                Some(meta)
+                Some(copy)
             } else {
                 None
             }
         }
         Some(assignment) => {
-            for arg in assignment.args.iter() {
-                if let Some(found) = find_with_id(arg.downgrade(), id) {
+            for (arg, copied) in assignment.args.iter().zip(&copy.borrow().assignment.as_ref()?.args) {
+                if let Some(found) = find_with_id(arg.downgrade(), copied.downgrade(), id) {
                     return Some(found);
                 }
             }

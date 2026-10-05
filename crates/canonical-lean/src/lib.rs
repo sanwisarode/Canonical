@@ -570,12 +570,11 @@ pub unsafe extern "C" fn refine(typ: *const LeanType) -> *const LeanResult {
         let prover = Prover::new(tb_ref.downgrade(), problem_bind.downgrade());
 
         let new_state = AppState {
-            current: prover.meta,
+            current: prover,
             undo: Vec::new(),
             redo: Vec::new(),
             autofill: true,
             constraints: false,
-            _owned_linked: Vec::new(),
             _owned_tb: tb_ref,
             _owned_bind: problem_bind
         };
@@ -603,7 +602,8 @@ pub unsafe extern "C" fn get_refinement() -> *const LeanResult {
         match GLOBAL_STATE.get() {
             None => panic!("No refine server running!"),
             Some(state) => {
-                let current = state.lock().unwrap_or_else(|e| e.into_inner()).current.downgrade();
+                let state = state.lock().unwrap_or_else(|e| e.into_inner());
+                let current = state.current.meta.downgrade();
                 let bindings = current.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone();
                 to_lean_term(
                     &IRTerm::from_lambda::<false>(

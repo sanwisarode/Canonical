@@ -382,6 +382,7 @@
                         removeSelected();
                         options[index].classList.add('selected');
                     } else if (e.key === 'Enter' && index !== null) {
+                        e.preventDefault();
                         options[index].click();
                     }
                 }
@@ -414,7 +415,7 @@
         </div>
     </div>
     <br>
-    <form id="term"></form>
+    <form id="term" onsubmit="return false"></form>
     <div class="centered" style="padding-top: 50px;">
         <b id='done'>Goals accomplished 🎉</b>
     </div>
