@@ -138,15 +138,13 @@ async fn assign(
 
     let current = state.current.meta.downgrade();
     let mut new = state.current.clone();
-    let Some(mut meta) = find_with_id(current, new.meta.downgrade(), assign.meta_id) else {
-        return Json(json!({ "error": "Stale metavariable" }));
-    };
+    let mut meta = find_with_id(current, new.meta.downgrade(), assign.meta_id).unwrap();
 
     let mut i = 0;
 
     while i < AUTOFILL_LIMIT {
         if !new.refine(meta, db) {
-            return Json(json!({ "error": "Invalid assignment" }));
+            break;
         }
 
         if !state.autofill {
@@ -219,9 +217,7 @@ async fn canonical1(State(state): State<Arc<Mutex<AppState>>>, Json(solve1) : Js
     let mut state = lock(&state);
     let current = state.current.meta.downgrade();
     let prover = state.current.clone();
-    let Some(next_root) = find_with_id(current, prover.meta.downgrade(), solve1.meta_id) else {
-        return Json(json!({ "error": "Stale metavariable" }));
-    };
+    let next_root = find_with_id(current, prover.meta.downgrade(), solve1.meta_id).unwrap();
     if let Some(term) = canonical_simple(prover, next_root) {
         let prev = mem::replace(&mut state.current, term);
         state.redo.clear();

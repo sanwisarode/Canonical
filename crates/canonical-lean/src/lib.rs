@@ -1,5 +1,5 @@
 // https://github.com/leanprover/lean4/blob/master/src/include/lean/lean.h
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use canonical_compat::ir::*;
 use canonical_core::core::*;
 use canonical_core::prover::*;
@@ -120,7 +120,7 @@ fn lean_align(v: usize, a: usize) -> usize {
 fn lean_alloc_small_object(sz: usize) -> *mut LeanObject {
     let sz = lean_align(sz, 8);
     unsafe {
-        let mem = lean_alloc_object(sz);
+        let mem = mi_malloc_small(sz);
         if mem.is_null() {
             lean_internal_panic_out_of_memory();
         }
@@ -179,7 +179,7 @@ fn lean_alloc_ctor(tag: usize, num_objs: usize, scalar_sz: usize) -> *mut LeanCt
     let sz = std::mem::size_of::<LeanCtorObject>() + std::mem::size_of::<*const LeanObject>() * num_objs + scalar_sz;
     let o = lean_alloc_ctor_memory(sz);
     unsafe {
-        (*o).m_header = LeanObject { m_rc: 1, m_cs_sz: lean_align(sz, 8) as u16, m_other: num_objs as u8, m_tag: tag as u8 };
+        (*o).m_header = LeanObject { m_rc: 1, m_cs_sz: 0, m_other: num_objs as u8, m_tag: tag as u8 };
     }
     o
 }
@@ -413,6 +413,7 @@ extern "C" {
     fn lean_alloc_object(sz: usize) -> *const LeanObject;
     // fn lean_alloc_small(sz: usize, slot_idx: usize) -> *const LeanObject;
     // fn lean_io_check_canceled_core() -> bool;
+    fn mi_malloc_small(sz: usize) -> *mut c_void;
     fn lean_internal_panic_out_of_memory();
     fn lean_mk_io_user_error(str: *const LeanStringObject) -> *const LeanObject;
     // fn lean_dbg_trace(s: *const LeanStringObject, f: *const LeanObject);
