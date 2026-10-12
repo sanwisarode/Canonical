@@ -137,5 +137,9 @@ lean/generated-rust-lib/*
 .lake
 lake-manifest.json
 
+<<<<<<< HEAD
 Results
 Results/*
+=======
+lean/debug.json
+>>>>>>> upstream/main

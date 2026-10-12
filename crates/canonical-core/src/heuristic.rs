@@ -1,4 +1,21 @@
 use crate::stats::*;
+use crate::core::Decl;
+use crate::memory::W;
+use arc_swap::ArcSwap;
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+
+pub static WEIGHTS: Lazy<ArcSwap<Vec<Vec<f32>>>> = Lazy::new(|| ArcSwap::from_pointee(Vec::new()));
+
+pub fn reset_weights() {
+    WEIGHTS.store(Arc::new(Vec::new()));
+}
+
+pub fn weight(goal: &W<Decl>, premise: &W<Decl>) -> f64 {
+    WEIGHTS.load().get(goal.borrow().index)
+        .and_then(|row| row.get(premise.borrow().index))
+        .map_or(1.0, |w| *w as f64)
+}
 
 /// Smoothly transitions between `prior` and `a / b` as `b` increases to `breakpoint`.
 pub fn div(a: f64, b: f64, prior: f64, breakpoint: f64) -> f64 {
@@ -27,8 +44,18 @@ impl MetaInfo {
 }
 
 impl AssignmentInfo {
+<<<<<<< HEAD
     /// Weight between the children of a DFS node.
     pub fn weight(&self) -> f64 {
         1.0
+=======
+    /// Heuristic penalty for this assignment.
+    pub fn tax(&self, next: &Next) -> f64 {
+        if self.had_rigid_equation || next.next.is_none() { return 0.0 }
+
+        // Percent of completions to this metavariable that derive from this head assignment.
+        let completion_share = div(self.stats.completion_share as f64, self.stats.completion_count as f64, 1.0, 100.0);
+        5.0 * (1.0 - completion_share)
+>>>>>>> upstream/main
     }
 }

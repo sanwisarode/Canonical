@@ -2,23 +2,26 @@ use crate::core::*;
 use crate::memory::*;
 use std::sync::Arc;
 use arc_swap::ArcSwap;
-use rustc_hash::FxHashMap as HashMap;
 use once_cell::sync::Lazy;
 use std::iter;
 
+<<<<<<< HEAD
 pub static COMPILATION: Lazy<ArcSwap<HashMap<(usize, usize), Vec<Index>>>> = Lazy::new(|| ArcSwap::from_pointee(HashMap::default()));
+=======
+pub static COMPILATION: Lazy<ArcSwap<Vec<Vec<Vec<Index>>>>> = Lazy::new(|| ArcSwap::from_pointee(Vec::new()));
+>>>>>>> upstream/main
 
 fn get_type(term: Term, owned_linked: &mut Vec<S<Linked>>) -> Option<Term> {
     let assn = term.base.borrow().assignment.as_ref().unwrap();
     let sub_es = term.es.sub_es(assn.head.0);
     let Some(context) = sub_es.linked.as_ref().unwrap().borrow().node.entry.context.as_ref() else { return None };
-    let Some(tb) = context.0.borrow().types.borrow()[assn.head.1].as_ref() else { return None };
+    let Some(tb) = context.0.borrow().typ.as_ref().unwrap().borrow().bindings.borrow()[assn.head.1].borrow().typ.as_ref() else { return None };
     
     return Some(Term {
-        base: tb.borrow().codomain.downgrade(),
-        es: sub_es.append(Node { 
-            entry: Entry::subst(Subst(WVec::new(&assn.args), term.es.clone())), 
-            bindings: tb.borrow().codomain.borrow().bindings.clone()
+        base: tb.downgrade(),
+        es: sub_es.append(Node {
+            entry: Entry::subst(Subst(WVec::new(&assn.args), term.es.clone())),
+            bindings: tb.borrow().bindings.clone()
         }, owned_linked)
     })
 }
@@ -28,7 +31,11 @@ pub fn unify(goal: Term, premise: Term, parent: W<Meta>, depth: u32) -> bool {
     let mut owned_linked = Vec::new();
     // println!("Unify depth {}: {:} = {:}", depth, goal.whnf::<true, ()>(&mut owned_linked, &mut ()), 
         // premise.whnf::<true, ()>(&mut owned_linked, &mut ()));
+<<<<<<< HEAD
     let eq = Equation { goal: goal.clone(), premise: premise.clone(), parent: parent.clone() };
+=======
+    let eq = Equation { goal: goal.clone(), premise: premise.clone(), allow_redexes: false };
+>>>>>>> upstream/main
     let success = eq.reduce(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
     if !success { return false; }
     match (get_type(goal, &mut owned_linked), get_type(premise, &mut owned_linked)) {
@@ -44,7 +51,7 @@ pub fn compile(typ: Type) {
     let mut owned_metas = Vec::new();
     get_compilation_info(typ, &mut goals, Polarity::Goal, &mut owned_linked, &mut owned_metas);
     // println!("{:?}", goals.iter().map(|(typ, children)| typ.2.name).collect::<Vec<_>>());
-    let mut compilation = HashMap::default();
+    let mut compilation = vec![vec![Vec::new(); goals.len()]; goals.len()];
     // let mut count: u32 = 0;
     for goal in goals.iter() {
         for goal2 in goals.iter() {
@@ -58,7 +65,7 @@ pub fn compile(typ: Type) {
                 }
                 // println!("{} <- {}: {}", goal.0.2.borrow().name, premise.0.2.borrow().name, success);
             }
-            compilation.insert((goal.0.0.usize(), goal2.0.0.usize()), unifications);
+            compilation[goal.0.0.borrow().index][goal2.0.0.borrow().index] = unifications;
         }
     }
     COMPILATION.store(Arc::new(compilation));
@@ -69,14 +76,22 @@ pub fn compile(typ: Type) {
 
 impl ES {
     /// Returns an iterator of `DeBruijnIndex` in this `ES``, along with the `Linked` they are rooted at.
-    pub fn iter_unify(&self, tb: W<TypeBase>) -> impl Iterator<Item = (DeBruijnIndex, W<Linked>)> {
+    pub fn iter_unify(&self, decl: W<Decl>) -> impl Iterator<Item = (DeBruijnIndex, W<Linked>)> {
+        let compilation = COMPILATION.load_full();
+        let goal = decl.borrow().index;
         iter::successors(self.linked.clone(), |node| 
             node.borrow().tail.clone() // Iterate over the linked list.
+<<<<<<< HEAD
         ).enumerate().flat_map(move |(db, node)|
             COMPILATION.load().get(&(tb.usize(), node.borrow().node.entry.context.as_ref().unwrap().0.usize())).expect("COMPILATION missing.").iter().map(|item| 
+=======
+        ).enumerate().flat_map(move |(db, node)| {
+            let context = node.borrow().node.entry.context.as_ref().unwrap().0.borrow().index;
+            compilation[goal][context].iter().map(|item| 
+>>>>>>> upstream/main
                 (DeBruijnIndex(DeBruijn(db as u32), item.clone()), node.clone())
             ).collect::<Vec<(DeBruijnIndex, W<Linked>)>>().into_iter()
-        )
+        })
     }
 }
 
@@ -88,7 +103,7 @@ fn get_compilation_info(typ: Type, goals: &mut Vec<(Type, Vec<(Type, Index)>)>,
             context: Some(typ.clone())
         },
         Polarity::Premise => {
-            let metas = typ.0.borrow().args_metas(None);
+            let metas = typ.0.borrow().typ.as_ref().unwrap().borrow().args_metas(None);
             let result = Entry {
                 params_id: next_u64(), lets_id: next_u64(),
                 subst: Some(Subst(WVec::new(&metas), ES::new())),
@@ -99,18 +114,20 @@ fn get_compilation_info(typ: Type, goals: &mut Vec<(Type, Vec<(Type, Index)>)>,
         }
     };
 
-    let es = typ.1.append(Node { entry: entry, bindings: typ.0.borrow().codomain.borrow().bindings.clone() }, owned_linked);
+    let bindings = &typ.0.borrow().typ.as_ref().unwrap().borrow().bindings;
+    let es = typ.1.append(Node { entry: entry, bindings: bindings.clone() }, owned_linked);
 
     let mut children = Vec::new();
 
-    for i in Indexed::iter(typ.0.borrow().types.borrow()) {
-        if let Some(child) = typ.0.borrow().types.borrow()[i].as_ref() {
-            let child = get_compilation_info(Type(child.downgrade(), es.clone(), typ.0.borrow().codomain.borrow().bindings.borrow()[i].downgrade()), goals, polarity.opposite(), owned_linked, owned_metas);
+    for i in Bindings::iter(bindings.borrow()) {
+        let child = &bindings.borrow()[i];
+        if child.borrow().typ.is_some() {
+            let child = get_compilation_info(Type(child.downgrade(), es.clone()), goals, polarity.opposite(), owned_linked, owned_metas);
             children.push((child, i));
         }
     }
 
-    let typ = Type(typ.0.clone(), es.clone(), typ.2.clone());
+    let typ = Type(typ.0.clone(), es.clone());
 
     if matches!(polarity, Polarity::Goal) {
         goals.push((typ.clone(), children));

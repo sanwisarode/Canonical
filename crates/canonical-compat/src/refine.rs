@@ -65,8 +65,12 @@ pub struct AppState {
     pub constraints: bool,
 
     // For ownership purposes.
+<<<<<<< HEAD
     pub _owned_tb: S<TypeBase>,
     pub _owned_bind: S<Bind>
+=======
+    pub _owned_decl: S<Decl>
+>>>>>>> upstream/main
 }
 
 /// Sent from JS to represent an assignment.
@@ -97,7 +101,7 @@ async fn term(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Val
     let state = lock(&state);
     let meta = state.current.meta.downgrade();
     let mut owned_linked = Vec::new();
-    let term = IRSpine::from_body::<false>(Term { base: meta.clone(), es: meta.borrow().gamma.clone() }.whnf::<false, ()>(&mut owned_linked, &mut ()), true);
+    let term = IRSpine::from_body::<false>(Term { base: meta.clone(), es: meta.borrow().gamma.clone() }.whnf::<false, ()>(&mut owned_linked, &mut (), false), true);
     let html = term.to_string();
 
     let mut unassigned = Vec::new();
@@ -226,10 +230,29 @@ async fn canonical1(State(state): State<Arc<Mutex<AppState>>>, Json(solve1) : Js
     Json(json!({}))
 }
 
+<<<<<<< HEAD
 /// Run Canonical for up to one second below the existing assignments.
 fn canonical_simple(mut prover: Prover, next_root: W<Meta>) -> Option<Prover> {
     // if prover.complete(next_root, Duration::from_secs(1)) { Some(prover) } else { None }
     None
+=======
+/// Run Canonical for 1 second on `prover`, returning the term if one is found.
+fn canonical_simple(prover: Prover) -> Option<S<Meta>> {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        prover.prove(&|value| {
+            if let Some(cloned) = Meta::try_clone(value.base) {
+                let _ = tx.send(Some(cloned.0));
+            }
+        }, false);
+        tx.send(None)
+    });
+
+    let term = rx.recv_timeout(Duration::from_secs(1));
+    RUN.store(false, Ordering::Relaxed);
+    term.ok().flatten()
+>>>>>>> upstream/main
 }
 
 /// Find the selected metavariable in the corresponding position of the clone.

@@ -1,133 +1,88 @@
 use canonical_core::core::*;
+<<<<<<< HEAD
 use canonical_core::memory::S;
 pub mod ir;
 pub mod refine;
 pub mod reduction;
 pub mod ai;
 pub mod ab;
+=======
+use canonical_core::prover::Prover;
+pub mod ir;
+pub mod refine;
+pub mod reduction;
+>>>>>>> upstream/main
 use ir::*;
+use canonical_core::stats::STEP_COUNT;
 use std::time::SystemTime;
+<<<<<<< HEAD
 use canonical_core::stats::STEP_COUNT;
 use canonical_core::search::EXPERIMENT;
 use std::sync::atomic::Ordering;
 use canonical_core::prover::Prover;
+=======
+// use crate::refine::{AppState, start_server};
+>>>>>>> upstream/main
 
-/// Manually construct a IRTerm body.
+/// Manually construct an IRExpr body.
 #[allow(unused_macros)]
 macro_rules! t {
-    ($s : expr) => {
-        IRTerm {
+    ($s : expr $(, $arg : expr)*) => {
+        IRExpr {
             params: vec![],
             lets: vec![],
-            head: $s.to_string(),
-            args: vec![]
+            spine: IRSpine {
+                head: $s.to_string(),
+                args: vec![$($arg),*],
+                premise_rules: vec![]
+            },
+            goal_rules: vec![]
         }
-    };
-    ($s : expr, $($arg:expr ),*) => {
-        {let mut args = Vec::new();
-        $(
-            args.push($arg);
-        )*
-        IRTerm {
-            params: vec![],
-            lets: vec![],
-            head: $s.to_string(),
-            args
-        }}
     };
 }
 
-/// Manually construct a lambda IRTerm.
+/// Manually construct a lambda IRExpr.
 #[allow(unused_macros)]
 macro_rules! l {
-    ($params : expr, $s : expr) => {
-        IRTerm {
-            params: $params.iter().map(|name| IRVar { name: name.to_string(), irrelevant: false }).collect(),
+    ($params : expr, $s : expr $(, $arg : expr)*) => {
+        IRExpr {
+            params: $params.iter().map(|name| IRDecl { name: name.to_string(), typ: None, equations: vec![] }).collect(),
             lets: vec![],
-            head: $s.to_string(),
-            args: vec![]
+            spine: IRSpine {
+                head: $s.to_string(),
+                args: vec![$($arg),*],
+                premise_rules: vec![]
+            },
+            goal_rules: vec![]
         }
-    };
-    ($params : expr, $s : expr, $( $arg:expr ),*) => {
-        {let mut args = Vec::new();
-        $(
-            args.push($arg);
-        )*
-        IRTerm {
-            params: $params.iter().map(|name| IRVar { name: name.to_string(), irrelevant: false }).collect(),
-            lets: vec![],
-            head: $s.to_string(),
-            args
-        }}
     };
 }
 
-/// Manually construct a IRType codomain.
+/// Manually construct an IRExpr codomain.
 #[allow(unused_macros)]
 macro_rules! T {
     () => {
-        None as Option<IRType>
+        None as Option<IRExpr>
     };
-    ($s : expr) => {
-        Some(IRType {
-            params: vec![],
-            lets: vec![],
-            codomain: IRTerm {
-                params: vec![],
-                lets: vec![],
-                head: $s.to_string(),
-                args: vec![]
-            }
-        })
-    };
-    ($s : expr, $( $arg:expr ),*) => {
-        {let mut args = Vec::new();
-        $(
-            args.push($arg);
-        )*
-        Some(IRType {
-            params: vec![],
-            lets: vec![],
-            codomain: IRTerm {
-                params: vec![],
-                lets: vec![],
-                head: $s.to_string(),
-                args
-            }
-        })}
+    ($s : expr $(, $arg : expr)*) => {
+        Some(t!($s $(, $arg)*))
     };
 }
 
-/// Manually construct a Pi IRType.
+/// Manually construct a Pi IRExpr.
 #[allow(unused_macros)]
 macro_rules! P {
-    ($params : expr, $s : expr) => {
-        Some(IRType {
-            params: $params.into_iter().map(|(_, typ)| typ).collect(),
+    ($params : expr, $s : expr $(, $arg : expr)*) => {
+        Some(IRExpr {
+            params: $params.into_iter().map(|(name, typ)| IRDecl { name: name.to_string(), typ, equations: vec![] }).collect(),
             lets: vec![],
-            codomain: IRTerm {
-                params: $params.iter().map(|(name, _)| IRVar { name: name.to_string(), irrelevant: false }).collect(),
-                lets: vec![],
+            spine: IRSpine {
                 head: $s.to_string(),
-                args: vec![]
-            }
+                args: vec![$($arg),*],
+                premise_rules: vec![]
+            },
+            goal_rules: vec![]
         })
-    };
-    ($params : expr, $s : expr, $( $arg:expr ),*) => {
-        {let mut args = Vec::new();
-        $(
-            args.push($arg);
-        )*
-        Some(IRType {
-            params: $params.into_iter().map(|(_, typ)| typ).collect(),
-            lets: vec![],
-            codomain: IRTerm {
-                params: $params.iter().map(|(name, _)| IRVar { name: name.to_string(), irrelevant: false }).collect(),
-                lets: vec![],
-                head: $s.to_string(),
-                args
-            }
-        })}
     };
 }
 
@@ -135,6 +90,7 @@ macro_rules! P {
 // Usage: `canonical-compat [count] [seed]` (defaults: 30 examples, time-based seed).
 #[tokio::main]
 pub async fn main() {
+<<<<<<< HEAD
     let count = std::env::args().nth(1).and_then(|arg| arg.parse().ok()).unwrap_or(30);
     let seed = std::env::args().nth(2).and_then(|arg| arg.parse().ok());
     ab::ab_test(count, seed, |enabled| EXPERIMENT.store(enabled, Ordering::Release));
@@ -146,15 +102,19 @@ async fn debug_main() {
     let tb = S::new(irt.to_type(&ES::new(), Polarity::Goal).0);
     let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));
     let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
+=======
+    let problem = IRDecl::load("lean/debug.json".to_string());
+    let (decl, tokens) = problem.to_problem();
+    canonical_core::ai::start(&tokens);
+
+>>>>>>> upstream/main
     // let state = AppState {
-    //     current: prover.meta,
+    //     current: Prover::new(decl.downgrade()).meta,
     //     undo: Vec::new(),
     //     redo: Vec::new(),
     //     autofill: true,
     //     constraints: false,
-    //     _owned_linked: owned_linked,
-    //     _owned_tb: tb_ref,
-    //     _owned_bind: problem_bind
+    //     _owned_decl: decl
     // };
 
     // start_server(state).await;
@@ -172,10 +132,10 @@ async fn debug_main() {
     });
     
     let now = SystemTime::now();
-    prover.prove(&|term: Term| {
+    Prover::new(decl.downgrade()).prove(&|term: Term| {
         let mut owned_linked = Vec::new();
         println!("{}", now.elapsed().unwrap().as_secs_f32());
-        println!("{}", IRSpine::from_body::<false>(term.whnf::<false, ()>(&mut owned_linked, &mut ()), false));
+        println!("{}", IRSpine::from_body::<false>(term.whnf::<false, ()>(&mut owned_linked, &mut (), false), false));
         std::process::exit(0);
     }, true);
 }

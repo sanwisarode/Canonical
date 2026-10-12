@@ -2,7 +2,7 @@ use crate::search::*;
 use crate::core::*;
 use crate::memory::*;
 use crate::stats::*;
-use crate::compiler::compile;
+use crate::heuristic;
 use rayon::prelude::*;
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
@@ -13,6 +13,7 @@ use crate::independence::{collect_unassigned, split, Component};
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
 
+<<<<<<< HEAD
 struct Frame {
     domain: Vec<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>,
     total_weight: f64,
@@ -25,6 +26,14 @@ struct Frame {
     /// The owned children frames. This is `None` if the current frame is
     /// unassigned.
     children: Option<Vec<S<Frame>>>
+=======
+/// A `Prover` has a metavariable for the main goal.
+pub struct Prover {
+    /// The root metavariable.
+    pub meta: S<Meta>,
+    /// In case we only want to solve a subtree of the root, this defines the root for `next`.
+    pub next_root: W<Meta>
+>>>>>>> upstream/main
 }
 
 pub struct Prover {
@@ -37,6 +46,7 @@ pub struct Prover {
     _owned_linked: Vec<S<Linked>>
 }
 
+<<<<<<< HEAD
 impl Frame {
     fn new(component: Component, parent: Option<W<Frame>>) -> Self {
         Frame { total_weight: 0.0, component, fuel: 0.0, extra_entropy: 0.0, parent, domain: Vec::new(), stats: SearchInfo::new_meta(), children: None }
@@ -171,6 +181,18 @@ impl Prover {
     //     solved
     // }
 
+=======
+impl Prover {
+    /// Creates a `Prover` solving for `decl`, whose type was translated under the empty ES.
+    /// The node binding the variables of the type is given `decl` as its typing context.
+    pub fn new(decl: W<Decl>) -> Self {
+        let typ = Type(decl.clone(), decl.borrow().typ.as_ref().unwrap().borrow().gamma.clone());
+        typ.1.linked.clone().unwrap().borrow_mut().node.entry.context = Some(typ.clone());
+        let meta = S::new(Meta::new(typ));
+        Prover { next_root: meta.downgrade(), meta }
+    }
+
+>>>>>>> upstream/main
     /// Gets the current (partial) term of the prover.
     pub fn get_term(&self) -> Term {
         Term { base: self.meta.downgrade(), es: self.meta.borrow().gamma.clone() }
@@ -214,6 +236,7 @@ impl Prover {
                 child.downgrade().borrow_mut().component.next.meta.borrow_mut().stats
                     .add_branch(&child.downgrade().borrow().stats);
 
+<<<<<<< HEAD
                 // By our post-condition, child will now be unassigned and added to
                 // self.frames, so we should remove it from self.frames. We
                 // could do away with this (except for the leaf nodes) by making
@@ -223,6 +246,59 @@ impl Prover {
                 // usually very small, so this isn't too pressing.
                 if let Some(i) = self.frames.iter().position(|f| f.points_to(child)) {
                     self.frames.swap_remove(i);
+=======
+        if exceeds { 
+            // Partial terms exceeds the depth threshold, consider the branch result unknown. 
+            return DFSResult { unknown_count: 1, steps: 0, entropy: next_result.meta_entropy, solution_count: 0, attempts: 0, branching: 0 };
+        }
+
+        // Start an attempt for next.
+        next.meta.borrow_mut().has_rigid_equation = next.has_rigid_equation;
+        next.meta.borrow_mut().stats.dfs_fence();
+        next.meta.borrow_mut().stats_buffer.dfs_fence();
+        next.meta.borrow_mut().stats_buffer.lifetime_attempts += 1;
+
+        // STEP_COUNT.fetch_add(1, Ordering::Relaxed);
+        
+        let mut options = Vec::new();
+        let mut total_weight = 0.0;
+        let mut attempts = 0;
+        let goal = next.meta.borrow().typ.as_ref().unwrap().0.clone();
+        for (db, linked) in next.meta.borrow().gamma.iter_unify(goal.clone()) {
+            let attempt = test(db, linked, next.meta.clone());
+            if attempt.is_some() {
+                attempts += 1;
+            }
+            if let Some(Some((assignment, constraints, info))) = attempt {
+                let weight = heuristic::weight(&goal, &assignment.decl);
+                total_weight += weight;
+                options.push((assignment, constraints, info, weight));
+            }
+        }
+        let branching = options.len();
+        next.meta.borrow_mut().stats_buffer.dfs_steps = options.len() as f64;
+
+        let mut results = Vec::new();
+        let mut iter = options.into_iter();
+        let num_jobs = NUM_JOBS.load(Ordering::Relaxed);
+
+        if branching < 2 || next_result.tree_entropy > 1000.0 || num_jobs > 100 {
+            while let Some((assignment, constraints, info, weight)) = iter.next() {
+                let meta = next.meta.borrow_mut();
+
+                meta.assign(assignment, constraints);
+
+                // Start assignment statistics.
+                meta.stats.assignment_fence();
+                meta.stats_buffer.assignment_fence();
+
+                meta.branching = total_weight / weight;
+                let result = self.parallel_dfs(max_entropy, max_size, callback);
+                
+                // The steps spent on this metavariable 
+                for child in meta.assignment.as_ref().unwrap().args.iter() {
+                    meta.stats_buffer.dfs_steps += child.borrow().stats.lifetime_steps + child.borrow().stats_buffer.lifetime_steps;
+>>>>>>> upstream/main
                 }
             }
 
@@ -274,6 +350,7 @@ impl Prover {
             // self.components.truncate(frame.truncate);
         }
 
+<<<<<<< HEAD
         let options = provers.len();
         NUM_JOBS.fetch_add(options, Ordering::Relaxed);
 
@@ -286,6 +363,23 @@ impl Prover {
         });
 
         NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
+=======
+        // Create cloned provers for each remaining option. 
+        let provers: Vec<(Prover, W<Meta>, AssignmentInfo)> = iter.filter_map(
+            |(assignment, constraints, info, weight)| {
+            next.meta.borrow_mut().assign(assignment, constraints);
+
+            next.meta.borrow_mut().branching = total_weight / weight;
+            let result = Meta::try_clone(self.meta.downgrade());
+
+            next.meta.borrow_mut().unassign();
+            result.map(|(meta, map)| (
+                Prover { meta, next_root: map.get(&self.next_root).unwrap().clone() },
+                map.get(&next.meta).unwrap().clone(), info
+            ))
+        }).collect();
+        NUM_JOBS.fetch_add(provers.len(), Ordering::Acquire);
+>>>>>>> upstream/main
 
         frame.borrow_mut().stats = acc;
     }
@@ -421,6 +515,26 @@ impl Prover {
                 .find(|f| f.borrow().contains(selected)).unwrap().downgrade();
             self.replay(new_child, orig_child, map);
         }
+<<<<<<< HEAD
+=======
+        let effective_branching_factor = if max_steps == 0 { 1.0 } else { acc.steps as f64 / max_steps as f64 };
+
+        next.meta.borrow_mut().stats_buffer.lifetime_steps += next.meta.borrow().stats_buffer.dfs_steps + next.meta.borrow().stats.dfs_steps;
+        let mut stats = next.meta.borrow().stats.clone();
+        stats.add(&next.meta.borrow().stats_buffer);
+
+        // End the attempt for next. 
+        next.meta.borrow_mut().stats.dfs_fence();
+        next.meta.borrow_mut().stats_buffer.dfs_fence();
+
+        next.log(&acc, weighted_entropy_gain / (acc.steps as f64 * effective_branching_factor), &stats);
+        acc
+    }
+
+    /// Accumulate the statistics of `other` into self.
+    fn accumulate(&self, other: Prover) {
+        accumulate_stats(self.meta.downgrade(), other.meta.downgrade());
+>>>>>>> upstream/main
     }
 }
 
