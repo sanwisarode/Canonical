@@ -1,7 +1,6 @@
 use crate::ir::IRDecl;
-use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs::File;
+use std::io::BufReader;
 use canonical_core::core::*;
 use canonical_core::memory::S;
 use canonical_core::prover::Prover;
@@ -16,21 +15,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The step limit shared by both runs of each example.
 const STEP_LIMIT: u32 = 10_000_000;
 
-/// The format of the examples in `Results/`.
-#[derive(Deserialize)]
-struct Example {
-    problem: IRDecl,
-    #[allow(dead_code)]
-    unifications: HashMap<String, HashMap<String, u32>>,
+/// Load an example from `ResultsIR/` (converted by `examples/convert_results.rs`).
+fn load(path: &str) -> IRDecl {
+    rmp_serde::decode::from_read(BufReader::new(File::open(path).unwrap())).unwrap()
 }
 
-impl Example {
-    fn load(path: &str) -> Example {
-        rmp_serde::decode::from_read(File::open(path).unwrap()).unwrap()
-    }
-}
-
-/// A/B test `configure(false)` against `configure(true)` on `n` random examples from `Results/`.
+/// A/B test `configure(false)` against `configure(true)` on `n` random examples from `ResultsIR/`.
 /// Pass the same `seed` to rerun on the same set of examples.
 pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
     let seed = seed.unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
@@ -47,7 +37,7 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
     for path in &files {
         let name = path.file_stem().unwrap().to_str().unwrap();
         let results = panic::catch_unwind(AssertUnwindSafe(|| {
-            let problem = Example::load(path.to_str().unwrap()).problem;
+            let problem = load(path.to_str().unwrap());
             let (decl, _) = problem.to_problem();
             [false, true].map(|enabled| {
                 configure(enabled);

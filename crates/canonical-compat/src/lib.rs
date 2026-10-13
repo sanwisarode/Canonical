@@ -7,8 +7,8 @@ pub mod ab;
 use ir::*;
 use canonical_core::stats::STEP_COUNT;
 use std::time::SystemTime;
-// use canonical_core::search::EXPERIMENT;
-// use std::sync::atomic::Ordering;
+use canonical_core::search::EXPERIMENT;
+use std::sync::atomic::Ordering;
 // use crate::refine::{AppState, start_server};
 
 /// Manually construct an IRExpr body.
@@ -76,15 +76,15 @@ macro_rules! P {
 
 #[tokio::main]
 async fn main() {
-    // Entrypoint for CLI: A/B test the `EXPERIMENT` flag on random examples from `Results/`.
+    // Entrypoint for CLI: A/B test the `EXPERIMENT` flag on random examples from `ResultsIR/`.
     // Usage: `canonical-compat [count] [seed]` (defaults: 30 examples, time-based seed).
-    // let count = std::env::args().nth(1).and_then(|arg| arg.parse().ok()).unwrap_or(30);
-    // let seed = std::env::args().nth(2).and_then(|arg| arg.parse().ok());
-    // ab::ab_test(count, seed, |enabled| EXPERIMENT.store(enabled, Ordering::Release));
+    let count = std::env::args().nth(1).and_then(|arg| arg.parse().ok()).unwrap_or(30);
+    let seed = std::env::args().nth(2).and_then(|arg| arg.parse().ok());
+    ab::ab_test(count, seed, |enabled| EXPERIMENT.store(enabled, Ordering::Release));
 
-    let problem = IRDecl::load("lean/debug.json".to_string());
-    let (decl, tokens) = problem.to_problem();
-    canonical_core::ai::start(&tokens);
+    // let problem = IRDecl::load("lean/debug.json".to_string());
+    // let (decl, tokens) = problem.to_problem();
+    // canonical_core::ai::start(&tokens);
 
     // let state = AppState {
     //     current: Prover::new(decl.downgrade()).meta,
@@ -98,22 +98,22 @@ async fn main() {
     // start_server(state).await;
 
     // Print step count each second.
-    std::thread::spawn(move || {
-        let mut prev = 0;
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let count = STEP_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-            println!("total: {}", count);
-            println!("t/s: {}", count - prev);
-            prev = count;
-        }
-    });
+    // std::thread::spawn(move || {
+    //     let mut prev = 0;
+    //     loop {
+    //         std::thread::sleep(std::time::Duration::from_secs(1));
+    //         let count = STEP_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    //         println!("total: {}", count);
+    //         println!("t/s: {}", count - prev);
+    //         prev = count;
+    //     }
+    // });
     
-    let now = SystemTime::now();
-    Prover::new(decl.downgrade()).prove(&|term: Term| {
-        let mut owned_linked = Vec::new();
-        println!("{}", now.elapsed().unwrap().as_secs_f32());
-        println!("{}", IRSpine::from_body::<false>(term.whnf::<false, ()>(&mut owned_linked, &mut (), false), false));
-        std::process::exit(0);
-    }, true);
+    // let now = SystemTime::now();
+    // Prover::new(decl.downgrade()).prove(&|term: Term| {
+    //     let mut owned_linked = Vec::new();
+    //     println!("{}", now.elapsed().unwrap().as_secs_f32());
+    //     println!("{}", IRSpine::from_body::<false>(term.whnf::<false, ()>(&mut owned_linked, &mut (), false), false));
+    //     std::process::exit(0);
+    // }, true);
 }
