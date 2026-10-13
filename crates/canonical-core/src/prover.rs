@@ -331,12 +331,12 @@ impl Prover {
             let mut frame = self.frames.swap_remove(self.select_frame());
 
             if self.size < max_size {
-                // if self.parallelize(frame.borrow()) {
-                //     self.parallelize_frame(frame.clone(), max_size, callback);
-                //     self.backtrack(self.frame.downgrade());
-                //     return false
-                // } else
-                if let Some(element) = frame.borrow_mut().domain.pop() {
+                // Root-only (basic): if frame.borrow().parent.is_none() && self.parallelize(frame.borrow()) {
+                if self.parallelize(frame.borrow()) {
+                    self.parallelize_frame(frame.clone(), max_size, callback);
+                    self.backtrack(self.frame.downgrade());
+                    return false
+                } else if let Some(element) = frame.borrow_mut().domain.pop() {
                     let children = self.assign(frame.clone(), element);
                     if children.iter().any(|x| x.borrow().prune()) {
                         let stats = frame.borrow_mut().component.next.meta.borrow_mut().unassign();
