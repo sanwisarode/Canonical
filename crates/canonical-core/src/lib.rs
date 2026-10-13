@@ -6,8 +6,5 @@ pub mod memory;
 pub mod stats;
 pub mod prover;
 pub mod compiler;
-<<<<<<< HEAD
 pub mod independence;
-=======
 pub mod ai;
->>>>>>> upstream/main

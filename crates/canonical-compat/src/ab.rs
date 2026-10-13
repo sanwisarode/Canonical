@@ -1,4 +1,4 @@
-use crate::ir::IRType;
+use crate::ir::IRDecl;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -16,10 +16,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The step limit shared by both runs of each example.
 const STEP_LIMIT: u32 = 10_000_000;
 
-/// The format of the examples in `Results/` (from CanonicalData.tar).
+/// The format of the examples in `Results/`.
 #[derive(Deserialize)]
 struct Example {
-    problem: IRType,
+    problem: IRDecl,
     #[allow(dead_code)]
     unifications: HashMap<String, HashMap<String, u32>>,
 }
@@ -36,7 +36,7 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
     let seed = seed.unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64);
     println!("seed: {seed}");
     watchdog();
-    LIMIT.store(STEP_LIMIT, Ordering::Release);
+    LIMIT.store(std::env::var("STEP_LIMIT").ok().and_then(|s| s.parse().ok()).unwrap_or(STEP_LIMIT), Ordering::Release);
 
     let files = sample_files("Results", n, seed);
     let mut solved = [0u32; 2];
@@ -48,11 +48,10 @@ pub fn ab_test<F: Fn(bool)>(n: usize, seed: Option<u64>, configure: F) {
         let name = path.file_stem().unwrap().to_str().unwrap();
         let results = panic::catch_unwind(AssertUnwindSafe(|| {
             let problem = Example::load(path.to_str().unwrap()).problem;
-            let tb = S::new(problem.to_type(&ES::new(), Polarity::Goal).0);
-            let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal));
+            let (decl, _) = problem.to_problem();
             [false, true].map(|enabled| {
                 configure(enabled);
-                let mut prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
+                let mut prover = Prover::new(decl.downgrade());
                 let solved = AtomicBool::new(false);
                 let steps = prover.prove(&|_| {
                     solved.store(true, Ordering::Relaxed);

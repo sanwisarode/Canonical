@@ -65,12 +65,7 @@ pub struct AppState {
     pub constraints: bool,
 
     // For ownership purposes.
-<<<<<<< HEAD
-    pub _owned_tb: S<TypeBase>,
-    pub _owned_bind: S<Bind>
-=======
     pub _owned_decl: S<Decl>
->>>>>>> upstream/main
 }
 
 /// Sent from JS to represent an assignment.
@@ -111,7 +106,7 @@ async fn term(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Val
         .map(|c| c.next.meta.borrow() as *const Meta as usize);
     let components : Vec<Vec<String>> = components.iter().map(|c|
         std::iter::once(&c.next.meta).chain(c.unassigned.iter()).map(|m|
-            m.borrow().typ.as_ref().unwrap().2.borrow().name.clone()
+            m.borrow().typ.as_ref().unwrap().0.borrow().name.clone()
         ).collect()
     ).collect();
     let html = format!("{}\n\n{:?}", html, components);
@@ -199,7 +194,7 @@ async fn reset(State(state): State<Arc<Mutex<AppState>>>) -> Json<serde_json::Va
     let mut state = lock(&state);
     state.undo = Vec::new();
     state.redo = Vec::new();
-    state.current = Prover::new(state._owned_tb.downgrade(), state._owned_bind.downgrade());
+    state.current = Prover::new(state._owned_decl.downgrade());
     Json(json!({}))
 }
 
@@ -230,29 +225,10 @@ async fn canonical1(State(state): State<Arc<Mutex<AppState>>>, Json(solve1) : Js
     Json(json!({}))
 }
 
-<<<<<<< HEAD
 /// Run Canonical for up to one second below the existing assignments.
 fn canonical_simple(mut prover: Prover, next_root: W<Meta>) -> Option<Prover> {
     // if prover.complete(next_root, Duration::from_secs(1)) { Some(prover) } else { None }
     None
-=======
-/// Run Canonical for 1 second on `prover`, returning the term if one is found.
-fn canonical_simple(prover: Prover) -> Option<S<Meta>> {
-    let (tx, rx) = mpsc::channel();
-
-    thread::spawn(move || {
-        prover.prove(&|value| {
-            if let Some(cloned) = Meta::try_clone(value.base) {
-                let _ = tx.send(Some(cloned.0));
-            }
-        }, false);
-        tx.send(None)
-    });
-
-    let term = rx.recv_timeout(Duration::from_secs(1));
-    RUN.store(false, Ordering::Relaxed);
-    term.ok().flatten()
->>>>>>> upstream/main
 }
 
 /// Find the selected metavariable in the corresponding position of the clone.
@@ -282,9 +258,9 @@ fn find_autofill(meta: W<Meta>) -> Option<(W<Meta>, DeBruijnIndex)> {
     match &meta.borrow().assignment {
         None => {
             let domain: Vec<(DeBruijnIndex, W<Linked>)> = meta.borrow().gamma.iter()
-            .filter(|(db, linked, _)| {
+            .filter(|(db, linked)| {
                 test(db.clone(), linked.clone(), meta.clone()).is_some_and(|o| o.is_some())
-            }).map(|(db, linked, _)| (db, linked)).collect();
+            }).collect();
 
             if domain.len() == 1 {
                 Some((meta, domain[0].0))

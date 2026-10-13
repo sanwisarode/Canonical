@@ -8,28 +8,11 @@ struct Build {
     pub arguments: HashSet<String>
 }
 
-<<<<<<< HEAD
-impl IRTerm {
-    pub fn add_local(&self, es: &ES, owned_linked: &mut Vec<S<Linked>>) -> (ES, S<Indexed<S<Bind>>>) {
-        let bindings = S::new(Indexed {
-            params: self.params.iter().map(|v| S::new(v.to_bind(Polarity::Premise))).collect(), // TODO
-            lets: self.lets.iter().map(|d| S::new(d.var.to_bind(Polarity::Premise))).collect() // TODO
-        });
-
-        let node = Node { 
-            entry: Entry { params_id: next_u64(), lets_id: next_u64(), subst: None, context: None }, 
-            bindings: bindings.downgrade() 
-        };
-        (es.append(node, owned_linked), bindings)
-    }
-
-=======
 impl IRExpr {
->>>>>>> upstream/main
     pub fn free_variables(&self, es: &ES, result: &mut HashSet<String>) {
         let mut owned_linked = Vec::new();
         // This function just returns strings, so the bindings don't need to be saved.
-        let (es, bindings) = self.add_local(es, &mut owned_linked, &Vec::new());
+        let (es, bindings) = self.add_local(es, &mut owned_linked, &Vec::new(), None);
         self.spine.free_variables(&es, result);
         drop(bindings);
     }
@@ -57,21 +40,12 @@ fn head_count(i: usize, builds: &Vec<(&mut Build, &IRSpine, ES, Vec<Position>)>)
             &format!("Not fully applied: {term}")
         );
         // This function just returns (u32, u32), so the bindings don't need to be saved.
-<<<<<<< HEAD
-        let (es, bindings) = arg.add_local(&es, &mut owned_linked);
-        if let Some((_, var)) = es.index_of(&arg.spine.head) {
-            if !seen.contains(&var.bind) {
-                distinct += 1;
-            }
-            seen.insert(var.bind.clone());
-=======
-        let (es, bindings) = arg.add_local(&es, &mut owned_linked, &Vec::new());
+        let (es, bindings) = arg.add_local(&es, &mut owned_linked, &Vec::new(), None);
         if let Some((_, decl)) = es.index_of(&arg.spine.head) {
             if !seen.contains(&decl) {
                 distinct += 1;
             }
             seen.insert(decl.clone());
->>>>>>> upstream/main
             non_wildcards += 1;
         }
         drop(bindings);
@@ -107,15 +81,9 @@ fn get_bindings(build: &mut Build, term: &IRSpine, es: ES, position: &[Position]
 
     for (i, arg) in term.args.iter().enumerate() {
         let mut owned_linked = Vec::new();
-        let (es, _bindings) = arg.add_local(&es, &mut owned_linked, &Vec::new());
+        let (es, _bindings) = arg.add_local(&es, &mut owned_linked, &Vec::new(), None);
         if es.index_of(&arg.spine.head).is_none() && build.arguments.contains(&arg.spine.head) {
             build.arguments.remove(&arg.spine.head);
-<<<<<<< HEAD
-            params.push(S::new(Bind::new(arg.spine.head.clone(), Polarity::Premise))); // TODO
-            found = true;
-        } else {
-            params.push(S::new(Bind::new("*".to_string(), Polarity::Premise))); // TODO
-=======
             let position = extend(position, &[Position::Arg(i)]);
             let decl = S::new(Decl::new(arg.spine.head.clone(), position.clone()));
             tokens.tokens.push((position, decl.downgrade()));
@@ -123,7 +91,6 @@ fn get_bindings(build: &mut Build, term: &IRSpine, es: ES, position: &[Position]
             found = true;
         } else {
             params.push(S::new(Decl::new("*".to_string(), Vec::new())));
->>>>>>> upstream/main
         }
     }
 
@@ -133,17 +100,6 @@ fn get_bindings(build: &mut Build, term: &IRSpine, es: ES, position: &[Position]
     });
 }
 
-<<<<<<< HEAD
-fn _to_rules(state: Vec<(&mut Build, &IRSpine, ES)>, owned_linked: &mut Vec<S<Linked>>, owned_bindings: &mut Vec<S<Indexed<S<Bind>>>>) {
-    // Partition by the head `Bind`.
-    let mut map: HashMap<W<Bind>, Vec<(&mut Build, &IRSpine, ES)>> = HashMap::new();
-    for (build, term, es) in state.into_iter() {
-        if let Some((_, var)) = es.index_of(&term.head) {
-            if !map.contains_key(&var.bind) {
-                map.insert(var.bind.clone(), Vec::new());
-            }
-            map.get_mut(&var.bind).unwrap().push((build, term, es));
-=======
 fn _to_rules(state: Vec<(&mut Build, &IRSpine, ES, Vec<Position>)>, owned_linked: &mut Vec<S<Linked>>, 
     owned_bindings: &mut Vec<S<Bindings>>, tokens: &mut Tokenization) {
     // Partition by the head `Decl`.
@@ -155,7 +111,6 @@ fn _to_rules(state: Vec<(&mut Build, &IRSpine, ES, Vec<Position>)>, owned_linked
                 map.insert(decl.clone(), Vec::new());
             }
             map.get_mut(&decl).unwrap().push((build, term, es, position));
->>>>>>> upstream/main
         } else {
             build.pattern.push(None);
         }
@@ -178,7 +133,7 @@ fn _to_rules(state: Vec<(&mut Build, &IRSpine, ES, Vec<Position>)>, owned_linked
             let mut new_builds: Vec<(&mut Build, &IRSpine, ES, Vec<Position>)> = Vec::new();
             for (build, term, es, position) in builds.iter_mut() {
                 let child_position = extend(position, &[Position::Arg(i)]);
-                let (es, bindings) = term.args[i].add_local(&es, owned_linked, &child_position);
+                let (es, bindings) = term.args[i].add_local(&es, owned_linked, &child_position, None);
                 owned_bindings.push(bindings);
                 new_builds.push((build, &term.args[i].spine, es, child_position));
             }
@@ -228,12 +183,8 @@ pub fn to_rules(rules: &Vec<IREquation>, es: &ES, owned_linked: &mut Vec<S<Linke
 
         Rule {
             pattern: build.pattern,
-<<<<<<< HEAD
-            replacement: S::new(rule.rhs.to_body(rhs_es, S::new(Indexed { params: Vec::new(), lets: Vec::new() }), Vec::new(), Polarity::Goal).0), // TODO
-=======
             replacement: S::new(rule.rhs.to_body(rhs_es, S::new(Bindings { params: Vec::new(), lets: Vec::new() }), Vec::new(),
-                &extend(position, &[Position::Rule(j), Position::RHS]), tokens)),
->>>>>>> upstream/main
+                &extend(position, &[Position::Rule(j), Position::RHS]), tokens).0), // TODO used
             attribution: rule.attribution.clone()
         }
     }).collect()
@@ -241,15 +192,9 @@ pub fn to_rules(rules: &Vec<IREquation>, es: &ES, owned_linked: &mut Vec<S<Linke
 
 
 fn to_redex(term: &IRSpine, es: &ES, build: &mut Vec<Instruction>) {
-<<<<<<< HEAD
-    if let Some((_, var)) = es.index_of(&term.head) {
-        build.push(Instruction {
-            bind: var.bind.clone(),
-=======
     if let Some((_, decl)) = es.index_of(&term.head) {
         build.push(Instruction {
             decl: decl.clone(),
->>>>>>> upstream/main
             parents: 0,
             child: 0  
         });

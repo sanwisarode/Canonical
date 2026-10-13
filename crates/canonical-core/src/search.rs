@@ -34,13 +34,8 @@ impl DFSResult {
 
 /// Construct and test the `Assignment` from refining `meta` with `head`.
 pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<Option<(Assignment, Vec<Box<dyn Constraint>>, AssignmentInfo)>> {
-<<<<<<< HEAD
     let Some(context) = curr.borrow().node.entry.context.as_ref() else { return None };
-    let Some(tb) = context.0.borrow().types.borrow()[head.1].as_ref() else { return None };
-=======
-    let context = curr.borrow().node.entry.context.as_ref().unwrap();
-    let tb = context.0.borrow().typ.as_ref().unwrap().borrow().bindings.borrow()[head.1].borrow().typ.as_ref().unwrap();
->>>>>>> upstream/main
+    let Some(tb) = context.0.borrow().typ.as_ref().unwrap().borrow().bindings.borrow()[head.1].borrow().typ.as_ref() else { return None };
     let args: Vec<S<Meta>> = tb.borrow().args_metas(Some(meta.clone()));
     let gamma = meta.borrow().gamma.clone();
     let mut _owned_linked = Vec::new();
@@ -50,7 +45,8 @@ pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<O
         head, args, decl: var_type.0.clone(), changes: Vec::new(), _owned_linked,
         has_rigid_type: matches!(var_type.codomain().whnf::<true, ()>(&mut Vec::new(), &mut (), false).1, Head::Var(_)),
         var_type: Some(var_type.clone()),
-        involved: Vec::new()
+        typing_involved: Vec::new(),
+        equations_involved: Vec::new()
     });
 
     let Some(constraints) = meta.clone().borrow_mut().test_assignment(meta.clone()) else {
@@ -70,8 +66,9 @@ pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<O
         let typ = var_type.get(Index::Param(i), 
             Entry { params_id: var_id, lets_id: let_id, subst: None, context: None }, &mut assignment._owned_linked
         );
-        arg.constraints = typ.0.borrow().constraints.iter().map(|(p, g, allow_redexes)| {
-            let result: Box<dyn Constraint> = Box::new(Equation { premise: Term { base: p.downgrade(), es: var_type.1.clone() }, goal: Term { base: g.downgrade(), es: var_type.1.clone() }, allow_redexes: *allow_redexes });
+        arg.constraints = typ.0.borrow().constraints.iter().map(|(p, g, allow_redexes, indices)| {
+            let result: Box<dyn Constraint> = Box::new(Equation { premise: Term { base: p.downgrade(), es: var_type.1.clone() }, goal: Term { base: g.downgrade(), es: var_type.1.clone() }, allow_redexes: *allow_redexes, parent: meta.clone(), index: Some(assignment.equations_involved.len()) });
+            assignment.equations_involved.push(var_type.1.get_many(indices));
             result
         }).collect();
         arg.gamma = gamma.append(Node {
@@ -80,7 +77,7 @@ pub fn test(head: DeBruijnIndex, curr: W<Linked>, mut meta: W<Meta>) -> Option<O
         }, &mut assignment._owned_linked);
 
         arg.gamma_involved.extend(arg.gamma.involved());
-        arg.typ_involved.extend(typ.1.get_many(typ.0.clone(), |tb| &tb.codomain_mvars));
+        arg.typ_involved.extend(typ.1.get_many(&typ.0.borrow().codomain_mvars));
 
         arg.typ = Some(typ);
     }

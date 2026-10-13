@@ -395,11 +395,7 @@ pub extern "C" fn rule_to_string(rule: *const LeanRule) -> *const LeanStringObje
 }
 
 /// Starts `prover`, appending solutions to `terms` and sending on `sender` once complete.
-<<<<<<< HEAD
-fn main(mut prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<Vec<IRTerm>>>) -> (DFSResult, u32) {
-=======
-fn main(prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<Vec<IRExpr>>>) -> (DFSResult, u32) {
->>>>>>> upstream/main
+fn main(mut prover: Prover, sender: Sender<()>, count: usize, terms: Arc<Mutex<Vec<IRExpr>>>) -> (DFSResult, u32) {
     prover.prove(&|term: Term| {
         let mut v = terms.lock().unwrap();
         let bindings = term.base.borrow().gamma.linked.as_ref().unwrap().borrow().node.bindings.clone();
@@ -477,18 +473,11 @@ pub unsafe extern "C" fn canonical(decl: *const LeanDecl, timeout: u64, count: u
 
         let arc : Arc<Mutex<Vec<IRExpr>>> = Arc::new(Mutex::new(Vec::new()));
         let arc_clone = arc.clone();
-<<<<<<< HEAD
-        let tb = S::new(ir_type.to_type(&ES::new(), Polarity::Goal).0);
-        let problem_bind = S::new(Bind::new(to_string(name), Polarity::Goal));
-        
-=======
         let (problem, tokens) = ir_decl.to_problem();
         if ai != 0 { canonical_core::ai::start(&tokens); }
         let prover = Prover::new(problem.downgrade());
 
->>>>>>> upstream/main
         let worker = thread::spawn(move || {
-            let prover = Prover::new(tb.downgrade(), problem_bind.downgrade());
             main(prover, tx, count, arc_clone)
         });
 
@@ -502,8 +491,8 @@ pub unsafe extern "C" fn canonical(decl: *const LeanDecl, timeout: u64, count: u
                 to_canonical_result(terms, result, last_level_steps) as *const LeanObject
             }
             Err(e) => {
-                let msg = if let Some(s) = e.downcast_ref::<String>() { s.as_str() } else
-                                if let Some(s) = e.downcast_ref::<&'static str>() { *s } else
+                let msg = if let Some(s) = e.downcast_ref::<String>() { s.as_str() } else 
+                                if let Some(s) = e.downcast_ref::<&'static str>() { *s } else 
                                 { "internal panic" };
                 panic!("{}", msg);
             }
@@ -527,32 +516,17 @@ pub unsafe extern "C" fn cancel() -> *const LeanResult {
 #[no_mangle]
 pub unsafe extern "C" fn refine(decl: *const LeanDecl) -> *const LeanResult {
     to_lean_result(None, || {
-<<<<<<< HEAD
-        let ir_type = to_ir_type(typ);
-        let tb_ref = S::new(ir_type.to_type(&ES::new(), Polarity::Goal).0);
-        let problem_bind = S::new(Bind::new("proof".to_string(), Polarity::Goal)); // must be stored
-        let prover = Prover::new(tb_ref.downgrade(), problem_bind.downgrade());
-
-        let new_state = AppState {
-            current: prover,
-=======
         let ir_decl = to_ir_decl(decl);
         let (problem, _) = ir_decl.to_problem();
-        let current = Prover::new(problem.downgrade()).meta;
+        let current = Prover::new(problem.downgrade());
 
         let new_state = AppState {
             current,
->>>>>>> upstream/main
             undo: Vec::new(),
             redo: Vec::new(),
             autofill: true,
             constraints: false,
-<<<<<<< HEAD
-            _owned_tb: tb_ref,
-            _owned_bind: problem_bind
-=======
             _owned_decl: problem
->>>>>>> upstream/main
         };
 
         match GLOBAL_STATE.get() {
