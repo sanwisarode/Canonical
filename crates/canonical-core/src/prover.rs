@@ -237,6 +237,7 @@ impl Prover {
     // Moving parallelism branch of dfs to new function
     fn parallelize_frame<F>(&mut self, mut frame: W<Frame>, max_size: usize, callback: &F) where F: Fn(Term) + Send + Sync {
         let mut provers = Vec::new();
+        let mut maps = Vec::new();
         // let mut domain = Vec::new();
         // domain.append(&mut frame.domain); // ownership hack
         while let Some(element) = frame.clone().borrow_mut().domain.pop() {
@@ -251,7 +252,9 @@ impl Prover {
             self.frames.extend(children.iter().map(|x| x.downgrade()));
             frame.borrow_mut().children = Some(children);
 
-            provers.push(self.clone());
+            let (prover, map) = self.clone_with_map();
+            provers.push(prover);
+            maps.push(map);
 
             self.size -= 1;
             self.frames.truncate(len);
@@ -269,17 +272,18 @@ impl Prover {
         let options = provers.len();
         NUM_JOBS.fetch_add(options, Ordering::Relaxed);
 
-        let acc = provers.into_par_iter().map(|mut prover| {
-            prover.dfs(max_size, callback);
-            prover.frame.borrow().stats.clone()
-        }).reduce(SearchInfo::new_branch, |mut a, b| {
-            a.add_branch(&b);
-            a
-        });
+        provers.par_iter_mut().for_each(|prover| { prover.dfs(max_size, callback); });
 
         NUM_JOBS.fetch_sub(options, Ordering::Relaxed);
 
-        frame.borrow_mut().stats = acc;
+        let mut meta = frame.borrow().component.next.meta.clone();
+        meta.borrow_mut().stats = SearchInfo::new_branch();
+        frame.borrow_mut().stats = SearchInfo::new_branch();
+        for (prover, map) in provers.iter().zip(&maps) {
+            let worker = map[&meta].clone();
+            meta.borrow_mut().stats.add_branch(&worker.borrow().stats);
+            frame.borrow_mut().stats.add_branch(&prover.frame.borrow().stats);
+        }
     }
 
 
@@ -377,7 +381,7 @@ impl Prover {
     fn replay(&mut self, mut new_frame: W<Frame>, orig_frame: W<Frame>, map: &mut HashMap<W<Meta>, W<Meta>>) {
         new_frame.borrow_mut().select(map[&orig_frame.borrow().component.next.meta].clone());
   
-        new_frame.borrow_mut().stats = SearchInfo::new_meta();
+        new_frame.borrow_mut().stats = SearchInfo::new_branch();
         new_frame.borrow_mut().populate(orig_frame.borrow().fuel, orig_frame.borrow().extra_entropy);
 
         // An unassigned frame (children == None) is a frontier leaf: nothing to
@@ -413,6 +417,16 @@ impl Prover {
                 .find(|f| f.borrow().contains(selected)).unwrap().downgrade();
             self.replay(new_child, orig_child, map);
         }
+    }
+}
+
+impl Prover {
+    fn clone_with_map(&self) -> (Self, HashMap<W<Meta>, W<Meta>>) {
+        let mut prover = Self::new(self.decl.clone());
+        prover.frames.clear();
+        let mut map = HashMap::from([(self.meta.downgrade(), prover.meta.downgrade())]);
+        prover.replay(prover.frame.downgrade(), self.frame.downgrade(), &mut map);
+        (prover, map)
     }
 }
 
