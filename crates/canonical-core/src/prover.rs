@@ -7,7 +7,7 @@ use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use std::collections::HashMap;
 // use std::time::{Duration, Instant};
-use crate::independence::{split, Component};
+use crate::independence::{split, collect_unassigned, Component};
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -140,28 +140,43 @@ impl Prover {
         true
     }
 
-    /// Search below the current assignments, optionally limited to a subtree.
-    // pub fn complete(&mut self, root: W<Meta>, duration: Duration) -> bool {
-    //     let deadline = Instant::now() + duration;
-    //     let roots: Vec<_> = self.frames.iter().map(|f| (f.clone(), f.borrow().parent.clone())).collect();
-    //     for (mut frame, _) in roots.iter().cloned() { frame.borrow_mut().parent = None; }
-    //     let baseline = self.size;
-    //     let mut fuel: f64 = 1e4;
-    //     let mut solved = false;
-    //     while fuel.is_finite() && Instant::now() < deadline {
-    //         let entropy: f64 = roots.iter().map(|(f, _)| f.borrow().component.meta_entropy).sum();
-    //         for (mut frame, _) in roots.iter().cloned() {
-    //             let extra = entropy - frame.borrow().component.meta_entropy;
-    //             frame.borrow_mut().populate(fuel, extra);
-    //         }
-    //         solved = self.dfs(baseline + (fuel.ln_1p() * 4.0) as usize, &|_| {}, Some((root.clone(), deadline)));
-    //         if solved { break; }
-    //         for (frame, _) in roots.iter().rev() { self.backtrack(frame.clone()); }
-    //         fuel *= 3.0;
-    //     }
-    //     for (mut frame, parent) in roots { frame.borrow_mut().parent = parent; }
-    //     solved
-    // }
+    pub fn complete(&mut self, next_root: W<Meta>) -> bool {
+        let mut unassigned = Vec::new();
+        collect_unassigned(next_root, &mut unassigned);
+        if unassigned.is_empty() { return true }
+
+        let mut rest = Vec::new();
+        let mut roots = Vec::new();
+        for f in std::mem::take(&mut self.frames) {
+            if unassigned.contains(&f.borrow().component.next.meta) {
+                roots.push((f.clone(), f.borrow().parent.clone()));
+                f.clone().borrow_mut().parent = None;
+                self.frames.push(f);
+            } else {
+                rest.push(f);
+            }
+        }
+
+        RUN.store(true, Ordering::Release);
+        let baseline = self.size;
+        let mut fuel = 1e4;
+        let mut solved = false;
+        while !solved && fuel <= 1e7 {
+            let entropy: f64 = roots.iter().map(|(f, _)| f.borrow().component.meta_entropy).sum();
+            for (f, _) in &roots {
+                let extra = entropy - f.borrow().component.meta_entropy;
+                f.clone().borrow_mut().populate(fuel, extra);
+            }
+            solved = self.dfs(baseline + (fuel.ln_1p() * 4.0) as usize, &|_| {});
+            if solved { break }
+            for (f, _) in roots.iter().rev() { self.backtrack(f.clone()); }
+            fuel *= 3.0;
+        }
+
+        for (mut f, parent) in roots { f.borrow_mut().parent = parent; }
+        self.frames.extend(rest);
+        solved
+    }
 
     /// Gets the current (partial) term of the prover.
     pub fn get_term(&self) -> Term {
@@ -306,8 +321,7 @@ impl Prover {
         best
     }
 
-    fn dfs<F>(&mut self, max_size: usize, callback: &F/*, refinement: Option<(W<Meta>, Instant)> */) -> bool where F: Fn(Term) + Send + Sync {
-        // while refinement.as_ref().map_or_else(|| RUN.load(Ordering::Relaxed), |(_, end)| Instant::now() < *end) {
+    fn dfs<F>(&mut self, max_size: usize, callback: &F) -> bool where F: Fn(Term) + Send + Sync {
         while RUN.load(Ordering::Relaxed) {
             if STEP_COUNT.fetch_add(1, Ordering::Relaxed) >= LIMIT.load(Ordering::Relaxed) {
                 RUN.store(false, Ordering::Relaxed);
@@ -315,23 +329,6 @@ impl Prover {
             }
             // TODO statistics accumulation on finished assignment and finished metavariable (attempt?)
             if self.frames.is_empty() { callback(self.get_term()); return true }
-            // let mut i = self.select_frame();
-            // if let Some((root, _)) = &refinement {
-            //     let mut unassigned = Vec::new();
-            //     collect_unassigned(root.clone(), &mut unassigned);
-            //     if unassigned.is_empty() { callback(self.get_term()); return true; }
-            //     if !unassigned.contains(&self.frames[i].borrow().component.next.meta) {
-            //         if let Some(j) = self.frames.iter().position(|f| unassigned.contains(&f.borrow().component.next.meta)) {
-            //             i = j;
-            //         } else {
-            //             let meta = unassigned.remove(0);
-            //             i = self.frames.iter().position(|f| f.borrow().contains(&meta)).unwrap();
-            //             let frame = self.frames[i].borrow_mut();
-            //             frame.select(meta);
-            //             frame.populate(frame.fuel, frame.extra_entropy);
-            //         }
-            //     }
-            // }
             let mut frame = self.frames.swap_remove(self.select_frame());
 
             if self.size < max_size {
@@ -366,8 +363,6 @@ impl Prover {
                 return false
             }
         }
-        // Ordinary proof search keeps its original cancellation cleanup.
-        // if refinement.is_none() { self.backtrack(self.frame.downgrade()); }
         self.backtrack(self.frame.downgrade());
         false
     }
