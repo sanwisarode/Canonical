@@ -7,7 +7,7 @@ use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
 use std::collections::HashMap;
 // use std::time::{Duration, Instant};
-use crate::independence::{split, collect_unassigned, Component};
+use crate::independence::{split, Component};
 
 /// The number of Rayon jobs yet to be completed.
 pub static NUM_JOBS: AtomicUsize = AtomicUsize::new(0);
@@ -141,40 +141,50 @@ impl Prover {
     }
 
     pub fn complete(&mut self, next_root: W<Meta>) -> bool {
-        let mut unassigned = Vec::new();
-        collect_unassigned(next_root, &mut unassigned);
-        if unassigned.is_empty() { return true }
+        if next_root.borrow().assignment.is_some() { return true }
 
-        let mut rest = Vec::new();
-        let mut roots = Vec::new();
-        for f in std::mem::take(&mut self.frames) {
-            if unassigned.contains(&f.borrow().component.next.meta) {
-                roots.push((f.clone(), f.borrow().parent.clone()));
-                f.clone().borrow_mut().parent = None;
-                self.frames.push(f);
-            } else {
-                rest.push(f);
+        let Some(idx) = self.frames.iter().position(|f| f.borrow().contains(&next_root)) else { return false };
+        let orig = self.frames[idx].clone();
+        orig.clone().borrow_mut().select(next_root.clone());
+        orig.clone().borrow_mut().populate(1e4, 0.0);
+
+        let component = Component { unassigned: Vec::new(), next: MetaInfo::new(next_root.clone()), meta_entropy: 0.0 };
+        let frame = S::new(Frame::new(component, None));
+        let w = frame.downgrade();
+        let saved_frame = std::mem::replace(&mut self.frame, frame);
+        let saved_frames = std::mem::replace(&mut self.frames, vec![w]);
+        let saved_limit = LIMIT.load(Ordering::Acquire);
+        LIMIT.store(10_000_000, Ordering::Release);
+
+        let solved = AtomicBool::new(false);
+        self.prove(&|_| {
+            solved.store(true, Ordering::Relaxed);
+            RUN.store(false, Ordering::Relaxed);
+        }, false);
+
+        LIMIT.store(saved_limit, Ordering::Release);
+        self.frame = saved_frame;
+        self.frames = saved_frames;
+        let solved = solved.into_inner();
+
+        if solved {
+            let siblings = orig.borrow().component.unassigned.clone();
+            let fuel = orig.borrow().fuel;
+            let extra = orig.borrow().extra_entropy;
+            let components = split(&siblings);
+            let sum: f64 = components.iter().map(|p| p.meta_entropy).sum();
+            let mut children = Vec::new();
+            for component in components {
+                let entropy = extra + sum - component.meta_entropy;
+                let mut child = Frame::new(component, Some(orig.clone()));
+                child.populate(fuel, entropy);
+                children.push(S::new(child));
             }
+            self.frames.swap_remove(idx);
+            self.frames.extend(children.iter().map(|f| f.downgrade()));
+            orig.clone().borrow_mut().children = Some(children);
+            self.size += 1;
         }
-
-        RUN.store(true, Ordering::Release);
-        let baseline = self.size;
-        let mut fuel = 1e4;
-        let mut solved = false;
-        while !solved && fuel <= 1e7 {
-            let entropy: f64 = roots.iter().map(|(f, _)| f.borrow().component.meta_entropy).sum();
-            for (f, _) in &roots {
-                let extra = entropy - f.borrow().component.meta_entropy;
-                f.clone().borrow_mut().populate(fuel, extra);
-            }
-            solved = self.dfs(baseline + (fuel.ln_1p() * 4.0) as usize, &|_| {});
-            if solved { break }
-            for (f, _) in roots.iter().rev() { self.backtrack(f.clone()); }
-            fuel *= 3.0;
-        }
-
-        for (mut f, parent) in roots { f.borrow_mut().parent = parent; }
-        self.frames.extend(rest);
         solved
     }
 
